@@ -24,6 +24,7 @@ const authController = require('./auth.controller');
 const {
     registerValidation,
     loginValidation,
+    verifyEmailCodeValidation,
     enable2FAValidation,
     disable2FAValidation,
     verify2FAValidation,
@@ -124,6 +125,13 @@ router.post('/login', authLimiter, loginValidation, validate, authController.log
  * @access Public (token-gated)
  */
 router.get('/verify-email', authController.verifyEmail);
+
+/**
+ * @route POST /api/auth/verify-email
+ * @desc Verify email address with the four-digit code sent alongside the link
+ * @access Public (rate limited and code-gated)
+ */
+router.post('/verify-email', authLimiter, verifyEmailCodeValidation, validate, authController.verifyEmailCode);
 
 /**
  * @route  POST /api/auth/resend-verification

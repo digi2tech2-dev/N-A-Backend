@@ -72,6 +72,15 @@ const verifyEmail = async (req, res) => {
 };
 
 /**
+ * POST /api/auth/verify-email
+ * Body: { email, code }
+ */
+const verifyEmailCode = catchAsync(async (req, res) => {
+    const result = await authService.verifyEmailCode(req.body);
+    sendSuccess(res, result, 'Email verified successfully.');
+});
+
+/**
  * POST /api/auth/resend-verification
  * Body: { email }
  *
@@ -168,6 +177,7 @@ module.exports = {
     register,
     login,
     verifyEmail,
+    verifyEmailCode,
     resendVerification,
     googleCallback,
     completeGoogleProfile,

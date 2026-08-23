@@ -51,6 +51,8 @@ const {
 
 const TWO_FACTOR_OTP_EXPIRY_MS = 5 * 60 * 1000;
 const PROFILE_COMPLETION_EXPIRY_MS = 15 * 60 * 1000;
+const EMAIL_VERIFICATION_CODE_EXPIRY_MS = 10 * 60 * 1000;
+const MAX_EMAIL_VERIFICATION_CODE_ATTEMPTS = 5;
 
 /** Sign full-session JWT for a user. */
 const signToken = (userId, role) =>
@@ -91,6 +93,22 @@ const _hashOtp = (raw) =>
 
 const _generateTwoFactorOtp = () =>
     crypto.randomInt(0, 1000000).toString().padStart(6, '0');
+
+const _generateEmailVerificationCode = () =>
+    crypto.randomInt(1000, 10000).toString();
+
+const _generateEmailVerificationCredentials = () => {
+    const { rawToken, hashedToken } = _generateVerificationToken();
+    const code = _generateEmailVerificationCode();
+    return {
+        rawToken,
+        hashedToken,
+        code,
+        codeHash: _hashOtp(code),
+        tokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        codeExpiresAt: new Date(Date.now() + EMAIL_VERIFICATION_CODE_EXPIRY_MS),
+    };
+};
 
 const _normalizeCountry = (country) => {
     const value = String(country || '').trim().toUpperCase();
@@ -202,8 +220,7 @@ const register = async ({
         : null;
 
     // ── 3. Verification token ─────────────────────────────────────────────────
-    const { rawToken, hashedToken } = _generateVerificationToken();
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);  // +24 h
+    const verification = _generateEmailVerificationCredentials();
 
     // ── 4. Create user ────────────────────────────────────────────────────────
     const user = await createUserWithReferralCodeRetry({
@@ -214,8 +231,11 @@ const register = async ({
         groupId: group._id,
         status: USER_STATUS.ACTIVE,
         verified: false,
-        emailVerificationToken: hashedToken,
-        emailVerificationExpires: expiresAt,
+        emailVerificationToken: verification.hashedToken,
+        emailVerificationExpires: verification.tokenExpiresAt,
+        emailVerificationCodeHash: verification.codeHash,
+        emailVerificationCodeExpires: verification.codeExpiresAt,
+        emailVerificationCodeAttempts: 0,
         profileCompletedAt: new Date(),
         currency: normalizedCurrency,
         ...(normalizedCountry ? { country: normalizedCountry } : {}),
@@ -235,10 +255,7 @@ const register = async ({
     });
 
     // ── 6. Send verification email (fire-and-forget — never block registration) ──
-    const baseUrl = process.env.APP_URL || 'http://localhost:5000';
-    const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${encodeURIComponent(rawToken)}`;
-
-    emailService.sendVerificationEmail(user, rawToken).catch((err) => {
+    emailService.sendVerificationEmail(user, verification.rawToken, verification.code).catch((err) => {
         console.error('[Auth] Failed to send verification email:', err.message);
     });
 
@@ -390,9 +407,80 @@ const verifyEmail = async (rawToken) => {
     user.verified = true;
     user.emailVerificationToken = undefined;
     user.emailVerificationExpires = undefined;
+    user.emailVerificationCodeHash = undefined;
+    user.emailVerificationCodeExpires = undefined;
+    user.emailVerificationCodeAttempts = 0;
     await user.save();
 
     return { redirectUrl: config.frontend.verifyRedirectUrl };
+};
+
+/**
+ * Consume the four-digit email verification code while preserving link verification.
+ */
+const verifyEmailCode = async ({ email, code } = {}) => {
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedCode = String(code || '').trim();
+
+    if (!normalizedEmail || !/^\d{4}$/.test(normalizedCode)) {
+        throw new AppError('Verification code must be exactly 4 digits.', 400, 'INVALID_VERIFICATION_CODE');
+    }
+
+    const now = new Date();
+    const invalidCodeError = () => new BusinessRuleError(
+        'Verification code is invalid or has expired. Please request a new one.',
+        'INVALID_OR_EXPIRED_VERIFICATION_CODE'
+    );
+    const user = await User.findOne({ email: normalizedEmail }).select(
+        '+emailVerificationToken +emailVerificationExpires +emailVerificationCodeHash +emailVerificationCodeExpires +emailVerificationCodeAttempts +verified'
+    );
+
+    const codeHash = _hashOtp(normalizedCode);
+    const codeIsUsable = Boolean(
+        user
+        && !user.verified
+        && user.emailVerificationCodeHash
+        && user.emailVerificationCodeExpires
+        && user.emailVerificationCodeExpires > now
+        && Number(user.emailVerificationCodeAttempts || 0) < MAX_EMAIL_VERIFICATION_CODE_ATTEMPTS
+        && _safeCompareHash(codeHash, user.emailVerificationCodeHash)
+    );
+
+    if (!codeIsUsable) {
+        if (user && !user.verified && user.emailVerificationCodeHash) {
+            const attempts = Number(user.emailVerificationCodeAttempts || 0) + 1;
+            user.emailVerificationCodeAttempts = attempts;
+            if (attempts >= MAX_EMAIL_VERIFICATION_CODE_ATTEMPTS) {
+                user.emailVerificationCodeHash = undefined;
+                user.emailVerificationCodeExpires = undefined;
+            }
+            await user.save();
+        }
+        throw invalidCodeError();
+    }
+
+    const result = await User.updateOne(
+        {
+            _id: user._id,
+            verified: false,
+            emailVerificationCodeHash: user.emailVerificationCodeHash,
+            emailVerificationCodeExpires: { $gt: now },
+        },
+        {
+            $set: { verified: true, emailVerificationCodeAttempts: 0 },
+            $unset: {
+                emailVerificationToken: 1,
+                emailVerificationExpires: 1,
+                emailVerificationCodeHash: 1,
+                emailVerificationCodeExpires: 1,
+            },
+        }
+    );
+
+    if (result.modifiedCount !== 1) throw invalidCodeError();
+
+    user.verified = true;
+    return { user: user.toSafeObject() };
 };
 
 // ─── resendVerification ───────────────────────────────────────────────────────
@@ -419,14 +507,16 @@ const resendVerification = async (email) => {
         );
     }
 
-    const { rawToken, hashedToken } = _generateVerificationToken();
-    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    const verification = _generateEmailVerificationCredentials();
 
-    user.emailVerificationToken = hashedToken;
-    user.emailVerificationExpires = expiresAt;
+    user.emailVerificationToken = verification.hashedToken;
+    user.emailVerificationExpires = verification.tokenExpiresAt;
+    user.emailVerificationCodeHash = verification.codeHash;
+    user.emailVerificationCodeExpires = verification.codeExpiresAt;
+    user.emailVerificationCodeAttempts = 0;
     await user.save();
 
-    emailService.sendVerificationEmail(user, rawToken).catch((err) => {
+    emailService.sendVerificationEmail(user, verification.rawToken, verification.code).catch((err) => {
         console.error('[Auth] Failed to resend verification email:', err.message);
     });
 
@@ -778,6 +868,7 @@ module.exports = {
     register,
     login,
     verifyEmail,
+    verifyEmailCode,
     resendVerification,
     loginWithGoogle,
     completeGoogleProfile,

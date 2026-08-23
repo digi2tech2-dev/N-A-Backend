@@ -18,11 +18,13 @@ const {
     register,
     login,
     verifyEmail,
+    verifyEmailCode,
     resendVerification,
     generate2FASecret,
     enable2FA,
     verify2FA,
 } = require('../modules/auth/auth.service');
+const config = require('../config/config');
 const emailService = require('../services/email.service');
 const {
     connectTestDB,
@@ -70,6 +72,17 @@ const registerUser = async () => {
     await dbUser.save();
 
     return { user: dbUser, rawToken: known };
+};
+
+const seedVerificationCode = async (userId, code = '1234', expiresAt = new Date(Date.now() + 10 * 60 * 1000)) => {
+    await User.findByIdAndUpdate(userId, {
+        emailVerificationCodeHash: crypto
+            .createHmac('sha256', config.jwt.secret)
+            .update(code)
+            .digest('hex'),
+        emailVerificationCodeExpires: expiresAt,
+        emailVerificationCodeAttempts: 0,
+    });
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -345,6 +358,83 @@ describe('[5] Login success', () => {
         expect(typeof result.token).toBe('string');
         expect(result.token.split('.')).toHaveLength(3);   // JWT has 3 parts
         expect(result.user.password).toBeUndefined();
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [3b] Email Verification Code
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('[3b] Email verification code', () => {
+    it('verifies a correct four-digit code and consumes both verification methods', async () => {
+        const { user } = await registerUser();
+        await seedVerificationCode(user._id, '1234');
+
+        await verifyEmailCode({ email: user.email, code: '1234' });
+
+        const updated = await User.findById(user._id).select(
+            '+emailVerificationToken +emailVerificationExpires +emailVerificationCodeHash +emailVerificationCodeExpires +verified'
+        );
+        expect(updated.verified).toBe(true);
+        expect(updated.emailVerificationToken).toBeNull();
+        expect(updated.emailVerificationCodeHash).toBeNull();
+    });
+
+    it('rejects an incorrect code without verifying the account', async () => {
+        const { user } = await registerUser();
+        await seedVerificationCode(user._id, '1234');
+
+        await expect(verifyEmailCode({ email: user.email, code: '9999' }))
+            .rejects.toMatchObject({ code: 'INVALID_OR_EXPIRED_VERIFICATION_CODE' });
+        expect((await User.findById(user._id)).verified).toBe(false);
+    });
+
+    it('rejects an expired code', async () => {
+        const { user } = await registerUser();
+        await seedVerificationCode(user._id, '1234', new Date(Date.now() - 1000));
+
+        await expect(verifyEmailCode({ email: user.email, code: '1234' }))
+            .rejects.toMatchObject({ code: 'INVALID_OR_EXPIRED_VERIFICATION_CODE' });
+    });
+
+    it('does not allow a code to be reused', async () => {
+        const { user } = await registerUser();
+        await seedVerificationCode(user._id, '1234');
+
+        await verifyEmailCode({ email: user.email, code: '1234' });
+        await expect(verifyEmailCode({ email: user.email, code: '1234' }))
+            .rejects.toMatchObject({ code: 'INVALID_OR_EXPIRED_VERIFICATION_CODE' });
+    });
+
+    it('invalidates the previous code when verification is resent', async () => {
+        const { user } = await registerUser();
+        await seedVerificationCode(user._id, '1234');
+        const oldHash = (await User.findById(user._id).select('+emailVerificationCodeHash')).emailVerificationCodeHash;
+
+        await resendVerification(user.email);
+
+        const rotated = await User.findById(user._id).select('+emailVerificationCodeHash +emailVerificationCodeAttempts');
+        expect(rotated.emailVerificationCodeHash).not.toEqual(oldHash);
+        expect(rotated.emailVerificationCodeAttempts).toBe(0);
+        await expect(verifyEmailCode({ email: user.email, code: '1234' }))
+            .rejects.toMatchObject({ code: 'INVALID_OR_EXPIRED_VERIFICATION_CODE' });
+    });
+
+    it('retains the existing verification-link flow', async () => {
+        const { user, rawToken } = await registerUser();
+        await seedVerificationCode(user._id, '1234');
+
+        await verifyEmail(rawToken);
+
+        const updated = await User.findById(user._id).select('+emailVerificationCodeHash +verified');
+        expect(updated.verified).toBe(true);
+        expect(updated.emailVerificationCodeHash).toBeNull();
+    });
+
+    it('rejects malformed codes', async () => {
+        const { user } = await registerUser();
+        await expect(verifyEmailCode({ email: user.email, code: '12a4' }))
+            .rejects.toMatchObject({ code: 'INVALID_VERIFICATION_CODE' });
     });
 });
 

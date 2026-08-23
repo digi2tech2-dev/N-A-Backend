@@ -58,6 +58,18 @@ const loginValidation = [
         .notEmpty().withMessage('Password is required'),
 ];
 
+const verifyEmailCodeValidation = [
+    body('email')
+        .trim()
+        .notEmpty().withMessage('Email is required')
+        .isEmail().withMessage('Please provide a valid email address')
+        .normalizeEmail(),
+
+    body('code')
+        .trim()
+        .matches(/^\d{4}$/).withMessage('Verification code must be exactly 4 digits'),
+];
+
 // ─── 2FA Validation ───────────────────────────────────────────────────────────
 
 const enable2FAValidation = [
@@ -105,6 +117,7 @@ const completeGoogleProfileValidation = [
 module.exports = {
     registerValidation,
     loginValidation,
+    verifyEmailCodeValidation,
     enable2FAValidation,
     disable2FAValidation,
     verify2FAValidation,

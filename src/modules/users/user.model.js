@@ -205,6 +205,27 @@ const userSchema = new mongoose.Schema(
             default: null,
         },
 
+        /** HMAC-SHA-256 hash of the four-digit email verification code. */
+        emailVerificationCodeHash: {
+            type: String,
+            select: false,
+            default: null,
+        },
+
+        /** Short-lived code expiry; independent from the link expiry. */
+        emailVerificationCodeExpires: {
+            type: Date,
+            select: false,
+            default: null,
+        },
+
+        /** Bounded failed code-verification attempts for the active code. */
+        emailVerificationCodeAttempts: {
+            type: Number,
+            select: false,
+            default: 0,
+        },
+
         role: {
             type: String,
             enum: Object.values(ROLES),
