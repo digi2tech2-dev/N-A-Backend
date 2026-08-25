@@ -60,6 +60,28 @@ const listMyNotificationsQuery = Joi.object({
     ...pagination,
 });
 
+const deviceToken = Joi.string()
+    .trim()
+    .min(20)
+    .max(4096)
+    .pattern(/^[A-Za-z0-9_:\-\.]+$/)
+    .required()
+    .messages({
+        'string.empty': 'token is required',
+        'string.min': 'token is invalid',
+        'string.max': 'token is invalid',
+        'string.pattern.base': 'token is invalid',
+        'any.required': 'token is required',
+    });
+
+const registerDeviceSchema = Joi.object({
+    token: deviceToken,
+    platform: Joi.string().valid('android').required(),
+    provider: Joi.string().valid('fcm').required(),
+});
+
+const unregisterDeviceSchema = Joi.object({ token: deviceToken });
+
 // ─── Admin: List All Notifications ────────────────────────────────────────────
 
 const listAllNotificationsQuery = Joi.object({
@@ -119,6 +141,8 @@ module.exports = {
     validateQuery,
     schemas: {
         listMyNotifications: listMyNotificationsQuery,
+        registerDevice: registerDeviceSchema,
+        unregisterDevice: unregisterDeviceSchema,
         listAllNotifications: listAllNotificationsQuery,
         adminSendNotification: adminSendNotificationSchema,
     },

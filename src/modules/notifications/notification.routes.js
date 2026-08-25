@@ -19,12 +19,16 @@ const { Router } = require('express');
 const notifCtrl = require('./notification.controller');
 const authenticate = require('../../shared/middlewares/authenticate');
 const requireActiveUser = require('../../shared/middlewares/requireActiveUser');
-const { validateQuery, schemas } = require('./notification.validation');
+const { validateBody, validateQuery, schemas } = require('./notification.validation');
 
 const router = Router();
 
 // ── Global guards ─────────────────────────────────────────────────────────────
 router.use(authenticate, requireActiveUser);
+
+// These must precede /:id/read. User ownership is always taken from the JWT.
+router.post('/devices', validateBody(schemas.registerDevice), notifCtrl.registerDevice);
+router.delete('/devices', validateBody(schemas.unregisterDevice), notifCtrl.unregisterDevice);
 
 // ─── List My Notifications ────────────────────────────────────────────────────
 router.get(

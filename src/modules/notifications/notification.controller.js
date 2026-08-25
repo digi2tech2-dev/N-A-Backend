@@ -7,6 +7,7 @@
  */
 
 const notificationService = require('./notification.service');
+const deviceTokenService = require('./deviceToken.service');
 const { sendSuccess, sendPaginated } = require('../../shared/utils/apiResponse');
 const catchAsync = require('../../shared/utils/catchAsync');
 
@@ -43,6 +44,27 @@ const getUnreadCount = catchAsync(async (req, res) => {
     sendSuccess(res, { unreadCount: count }, 'Unread count retrieved.');
 });
 
+// POST /api/me/notifications/devices — associate this installation with req.user only.
+const registerDevice = catchAsync(async (req, res) => {
+    await deviceTokenService.registerDeviceToken({
+        userId: req.user._id,
+        token: req.body.token,
+        platform: req.body.platform,
+        provider: req.body.provider,
+    });
+    // Do not echo a device token or user ownership details.
+    sendSuccess(res, { registered: true }, 'Device registered.');
+});
+
+// DELETE /api/me/notifications/devices — idempotent current-user logout cleanup.
+const unregisterDevice = catchAsync(async (req, res) => {
+    const result = await deviceTokenService.unregisterDeviceToken({
+        userId: req.user._id,
+        token: req.body.token,
+    });
+    sendSuccess(res, result, 'Device unregistered.');
+});
+
 // =============================================================================
 // PATCH /api/me/notifications/:id/read  —  Mark one as read
 // =============================================================================
@@ -64,6 +86,8 @@ const markAllAsRead = catchAsync(async (req, res) => {
 module.exports = {
     getMyNotifications,
     getUnreadCount,
+    registerDevice,
+    unregisterDevice,
     markAsRead,
     markAllAsRead,
 };

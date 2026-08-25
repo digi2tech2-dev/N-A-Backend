@@ -41,6 +41,25 @@
 const { Notification, NOTIFICATION_TYPE, NOTIFICATION_SCOPE } = require('./notification.model');
 const { User } = require('../users/user.model');
 const { NotFoundError, BusinessRuleError } = require('../../shared/errors/AppError');
+const { sendPushToUser } = require('./fcm.service');
+
+const PUSH_EVENT = Object.freeze({
+    ORDER_STATUS: { route: '/orders', body: 'تم تحديث حالة طلبك' },
+    DEPOSIT_STATUS: { route: '/wallet/topups', body: 'تم تحديث حالة طلب الشحن' },
+    TARGET_STATUS: { route: '/target-orders', body: 'تم تحديث حالة طلب التارجت' },
+});
+
+const buildPushPayload = (eventType) => {
+    const event = PUSH_EVENT[eventType];
+    if (!event) return null;
+    return {
+        title: 'N&A',
+        body: event.body,
+        // Data is deliberately limited to a frontend allowlisted event + route.
+        // No financial amounts, reasons, user data, or order contents are sent.
+        data: { type: eventType.toLowerCase(), route: event.route },
+    };
+};
 
 // =============================================================================
 // INTERNAL SAFE WRAPPER
@@ -111,9 +130,9 @@ const notifyAdminsAndSupervisors = ({ title, message, type = NOTIFICATION_TYPE.I
  * @param {string|null}     [params.link]
  * @param {string}          [params.source='SYSTEM']
  */
-const notifyUser = ({ userId, title, message, type = NOTIFICATION_TYPE.INFO, link = null, source = 'SYSTEM' }) => {
-    return _safe('notifyUser', () =>
-        Notification.create({
+const notifyUser = ({ userId, title, message, type = NOTIFICATION_TYPE.INFO, link = null, source = 'SYSTEM', pushPayload = null }) => {
+    return _safe('notifyUser', async () => {
+        const notification = await Notification.create({
             userId,
             title,
             message,
@@ -121,8 +140,17 @@ const notifyUser = ({ userId, title, message, type = NOTIFICATION_TYPE.INFO, lin
             scope: NOTIFICATION_SCOPE.USER,
             link,
             source,
-        })
-    );
+        });
+
+        if (pushPayload) {
+            // FCM is best effort and never changes the existing in-app result.
+            void sendPushToUser({ userId, payload: pushPayload }).catch((error) => {
+                console.error(`[Notification] FCM dispatch failed: ${String(error?.code || error?.message || 'unknown error')}`);
+            });
+        }
+
+        return notification;
+    });
 };
 
 /**
@@ -199,6 +227,7 @@ const notifyDepositApproved = (deposit) => {
         message: `Your deposit of ${deposit.requestedAmount} ${deposit.currency || 'USD'} has been approved and credited to your wallet.`,
         type: NOTIFICATION_TYPE.SUCCESS,
         source: 'DEPOSIT',
+        pushPayload: buildPushPayload('DEPOSIT_STATUS'),
     });
 };
 
@@ -232,6 +261,7 @@ const notifyDepositRejected = (deposit, adminNotes = null) => {
         message: `Your deposit of ${deposit.requestedAmount} ${deposit.currency || 'USD'} has been rejected.${reason}`,
         type: NOTIFICATION_TYPE.ERROR,
         source: 'DEPOSIT',
+        pushPayload: buildPushPayload('DEPOSIT_STATUS'),
     });
 };
 
@@ -246,6 +276,7 @@ const notifyTargetApproved = (order) => {
         message: `Your target coin purchase of ${order.coinAmount} coins has been approved.`,
         type: NOTIFICATION_TYPE.SUCCESS,
         source: 'TARGET',
+        pushPayload: buildPushPayload('TARGET_STATUS'),
     });
 };
 
@@ -262,6 +293,7 @@ const notifyTargetRejected = (order, adminNotes = null) => {
         message: `Your target coin purchase of ${order.coinAmount} coins has been rejected.${reason}`,
         type: NOTIFICATION_TYPE.ERROR,
         source: 'TARGET',
+        pushPayload: buildPushPayload('TARGET_STATUS'),
     });
 };
 
@@ -295,6 +327,7 @@ const notifyOrderCompleted = (order) => {
         message: `Your order ${label} has been completed successfully.`,
         type: NOTIFICATION_TYPE.SUCCESS,
         source: 'ORDER',
+        pushPayload: buildPushPayload('ORDER_STATUS'),
     });
 };
 
@@ -310,6 +343,7 @@ const notifyOrderFailed = (order) => {
         message: `Your order ${label} has failed. A refund has been issued to your wallet.`,
         type: NOTIFICATION_TYPE.WARNING,
         source: 'ORDER',
+        pushPayload: buildPushPayload('ORDER_STATUS'),
     });
 };
 
