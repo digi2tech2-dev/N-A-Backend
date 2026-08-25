@@ -57,6 +57,8 @@ const { AuditLog } = require('../modules/audit/audit.model');
 const { DEPOSIT_ACTIONS, WALLET_ACTIONS, ENTITY_TYPES } = require('../modules/audit/audit.constants');
 const { User } = require('../modules/users/user.model');
 const { WalletTransaction } = require('../modules/wallet/walletTransaction.model');
+const meController = require('../modules/me/me.controller');
+const { Currency } = require('../modules/currency/currency.model');
 
 const {
     connectTestDB,
@@ -148,17 +150,17 @@ describe('[1] Model validation', () => {
         ).rejects.toThrow(/greater than 0/);
     });
 
-    it('rejects when receiptImage is missing', async () => {
-        await expect(
-            DepositRequest.create({
-                userId,
-                paymentMethodId: new mongoose.Types.ObjectId(),
-                requestedAmount: 100,
-                currency: 'USD',
-                exchangeRate: 1,
-                amountUsd: 100,
-            })
-        ).rejects.toThrow(/receiptImage is required/);
+    it('accepts a deposit request without a receiptImage', async () => {
+        const deposit = await DepositRequest.create({
+            userId,
+            paymentMethodId: new mongoose.Types.ObjectId(),
+            requestedAmount: 100,
+            currency: 'USD',
+            exchangeRate: 1,
+            amountUsd: 100,
+        });
+
+        expect(deposit.receiptImage).toBeNull();
     });
 
     it('rejects when paymentMethodId is missing', async () => {
@@ -240,6 +242,47 @@ describe('[2] createDepositRequest', () => {
         const found = await DepositRequest.findById(deposit._id);
         expect(found).not.toBeNull();
         expect(found.status).toBe(DEPOSIT_STATUS.PENDING);
+    });
+
+    it('submits a Vodafone Cash deposit without a receipt image', async () => {
+        await Currency.create({
+            code: 'EGP',
+            name: 'Egyptian Pound',
+            symbol: 'EGP',
+            platformRate: 1,
+            isActive: true,
+        });
+
+        const response = await new Promise((resolve, reject) => {
+            const res = {
+                status: jest.fn().mockReturnThis(),
+                json: jest.fn(resolve),
+            };
+
+            meController.createDeposit({
+                body: {
+                    requestedAmount: '500',
+                    currency: 'EGP',
+                    paymentMethodId: 'vodafone-cash',
+                    senderWalletNumber: '01012572681',
+                    transactionNumber: '022494991382',
+                },
+                file: undefined,
+                user: customer,
+                get: jest.fn(() => 'jest'),
+                auditContext: {
+                    actorId: customer._id,
+                    actorRole: 'CUSTOMER',
+                    ipAddress: null,
+                    userAgent: 'jest',
+                },
+            }, res, reject);
+        });
+
+        expect(response.success).toBe(true);
+        expect(response.data.status).toBe(DEPOSIT_STATUS.PENDING);
+        expect(response.data.receiptImage).toBeNull();
+        expect(response.data.paymentTransactionId).toBe('022494991382');
     });
 
     it('creates DEPOSIT_REQUESTED audit log (fire-and-forget)', async () => {

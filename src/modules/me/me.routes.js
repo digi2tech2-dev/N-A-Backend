@@ -20,7 +20,7 @@
  *  GET  /api/me/orders                 My orders (status, date, page, limit)
  *  GET  /api/me/orders/:id             My order detail (ownership enforced)
  *
- *  POST /api/me/deposits               Submit deposit request (multipart: receipt)
+ *  POST /api/me/deposits               Submit deposit request (multipart; receipt optional)
  *  GET  /api/me/deposits               My deposit history
  *  GET  /api/me/deposits/:id           My deposit detail (ownership enforced)
  */
@@ -264,9 +264,9 @@ const createDepositValidation = [
 
 /**
  * @route  POST /api/me/deposits
- * @desc   Submit a deposit request with receipt upload (multi-currency)
+ * @desc   Submit a deposit request with optional receipt upload (multi-currency)
  * @access Active user
- * @body   multipart/form-data: requestedAmount, currency, paymentMethodId, receipt (file), notes?
+ * @body   multipart/form-data: requestedAmount, currency, paymentMethodId, receipt? (file), notes?
  */
 router.post(
     '/deposits',

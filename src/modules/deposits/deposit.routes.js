@@ -26,9 +26,9 @@ router.use(authenticate);
 
 /**
  * @route  POST /api/deposits
- * @desc   Customer submits a new deposit request with receipt upload
+ * @desc   Customer submits a new deposit request; receipt upload is optional
  * @access Authenticated ACTIVE user
- * @body   multipart/form-data: receipt (file), requestedAmount, currency, paymentMethodId, notes?
+ * @body   multipart/form-data: requestedAmount, currency, paymentMethodId, receipt? (file), notes?
  */
 router.post(
     '/',

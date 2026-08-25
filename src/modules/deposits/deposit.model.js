@@ -90,15 +90,15 @@ const depositRequestSchema = new mongoose.Schema(
         },
 
         /**
-         * Relative path to the uploaded receipt image/PDF.
-         * Stored by multer via createUpload('deposits').
+         * Optional relative path to an uploaded receipt image/PDF.
+         * Stored by multer via createUpload('deposits') when supplied.
          * e.g. 'uploads/deposits/1679580000000-abcdef01.jpg'
          */
         receiptImage: {
             type: String,
-            required: [true, 'receiptImage is required'],
             trim: true,
             maxlength: [2048, 'receiptImage path cannot exceed 2048 characters'],
+            default: null,
         },
 
         /** Optional customer notes. */

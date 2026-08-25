@@ -116,7 +116,7 @@ const normalizePaymentTransactionId = (value) => {
  * @param {string}          params.currency
  * @param {number}          params.exchangeRate
  * @param {number}          params.amountUsd
- * @param {string}          params.receiptImage
+ * @param {string|null}     [params.receiptImage]
  * @param {string|null}     [params.notes]
  * @param {Object|null}     [params.senderDetails]
  * @param {Object|null}     [params.auditContext]

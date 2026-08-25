@@ -76,21 +76,13 @@ const analyzeReceiptUpload = catchAsync(async (req, _res, next) => {
 
 /**
  * POST /api/deposits
- * Customer creates a deposit request with receipt upload.
+ * Customer creates a deposit request. A receipt upload is optional.
  *
  * Multer middleware (createUpload('deposits').single('receipt')) runs
  * BEFORE this handler — req.file is populated on success.
  */
 const createDeposit = catchAsync(async (req, res) => {
-    // ── Validate file upload ─────────────────────────────────────────────
-    if (!req.file) {
-        throw new BusinessRuleError(
-            'Receipt image is required. Please upload a file.',
-            'RECEIPT_REQUIRED'
-        );
-    }
-
-    if (!req.receiptAnalysisValidated) {
+    if (req.file && !req.receiptAnalysisValidated) {
         await validateReceiptUpload(req.file);
     }
 
@@ -123,7 +115,7 @@ const createDeposit = catchAsync(async (req, res) => {
 
     // ── Build relative receipt path ──────────────────────────────────────
     // req.file.path is absolute; we store only the relative part.
-    const receiptImage = `uploads/deposits/${req.file.filename}`;
+    const receiptImage = req.file ? `uploads/deposits/${req.file.filename}` : null;
 
     // ── Persist ──────────────────────────────────────────────────────────
     const deposit = await depositService.createDepositRequest({

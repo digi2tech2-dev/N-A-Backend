@@ -429,19 +429,10 @@ const getProduct = catchAsync(async (req, res) => {
 
 /**
  * Create a new deposit request.
- * Accepts multipart/form-data with a `receipt` file (via upload middleware).
- * The uploaded file path is stored as `receiptImage`.
+ * Accepts multipart/form-data; an optional `receipt` file is stored as
+ * `receiptImage` when present.
  */
 const createDeposit = catchAsync(async (req, res) => {
-    // ── Validate file upload ─────────────────────────────────────────────
-    if (!req.file) {
-        const { BusinessRuleError } = require('../../shared/errors/AppError');
-        throw new BusinessRuleError(
-            'Receipt image is required. Please upload a file.',
-            'RECEIPT_REQUIRED'
-        );
-    }
-
     const { requestedAmount, currency, paymentMethodId, notes } = req.body;
     const senderDetails = depositService.normalizeSenderDetails(req.body);
     const paymentTransactionId = req.body.transactionId
@@ -472,7 +463,7 @@ const createDeposit = catchAsync(async (req, res) => {
     const amountUsd = Number((parsedAmount / exchangeRate).toFixed(2));
 
     // ── Build relative receipt path ──────────────────────────────────────
-    const receiptImage = `uploads/deposits/${req.file.filename}`;
+    const receiptImage = req.file ? `uploads/deposits/${req.file.filename}` : null;
 
     // ── Persist ──────────────────────────────────────────────────────────
     const deposit = await depositService.createDepositRequest({
