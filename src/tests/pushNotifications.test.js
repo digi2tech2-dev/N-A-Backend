@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const app = require('../app');
 const config = require('../config/config');
 const { DeviceToken } = require('../modules/notifications/deviceToken.model');
+const { Notification } = require('../modules/notifications/notification.model');
 const deviceTokenService = require('../modules/notifications/deviceToken.service');
 const fcmService = require('../modules/notifications/fcm.service');
 const notificationService = require('../modules/notifications/notification.service');
@@ -11,8 +12,10 @@ const {
     connectTestDB,
     disconnectTestDB,
     clearCollections,
+    createAdmin,
     createGroup,
     createCustomer,
+    ROLES,
 } = require('./testHelpers');
 
 const token = (char = 'a') => char.repeat(160);
@@ -214,5 +217,56 @@ describe('FCM delivery boundary', () => {
         });
         await flush();
         expect(messaging.sendEachForMulticast).toHaveBeenCalledTimes(1);
+    });
+
+    it('dispatches a sanitized manual-order push to every admin-review recipient', async () => {
+        const admin = await createAdmin();
+        const supervisor = await createAdmin({ role: ROLES.SUPERVISOR });
+        const adminToken = token('h');
+        const supervisorToken = token('i');
+        await deviceTokenService.registerDeviceToken({ userId: admin._id, token: adminToken, platform: 'android', provider: 'fcm' });
+        await deviceTokenService.registerDeviceToken({ userId: supervisor._id, token: supervisorToken, platform: 'android', provider: 'fcm' });
+        const messaging = {
+            sendEachForMulticast: jest.fn().mockResolvedValue({ successCount: 1, failureCount: 0, responses: [{ success: true }] }),
+        };
+        fcmService.setMessagingClientForTests(messaging);
+
+        const notifications = await notificationService.notifyNewManualOrder({
+            orderNumber: 'private-order-number',
+            userNameSnapshot: 'Private customer name',
+            productNameSnapshot: 'Private product name',
+        });
+
+        expect(notifications).toHaveLength(2);
+        expect(await Notification.countDocuments({ source: 'ORDER', link: '/admin/orders' })).toBe(2);
+        await waitFor(() => messaging.sendEachForMulticast.mock.calls.length === 2);
+        expect(messaging.sendEachForMulticast).toHaveBeenCalledTimes(2);
+
+        const messages = messaging.sendEachForMulticast.mock.calls.map(([message]) => message);
+        expect(messages.map((message) => message.tokens[0]).sort()).toEqual([adminToken, supervisorToken].sort());
+        messages.forEach((message) => {
+            expect(message.notification).toEqual({ title: 'طلب يدوي جديد', body: 'يوجد طلب جديد يحتاج إلى المتابعة' });
+            expect(message.data).toEqual({ type: 'admin_order_created', route: '/admin/orders' });
+            expect(JSON.stringify(message)).not.toContain('private-order-number');
+            expect(JSON.stringify(message)).not.toContain('Private customer name');
+            expect(JSON.stringify(message)).not.toContain('Private product name');
+        });
+    });
+
+    it('keeps the manual-order in-app notifications when FCM delivery fails', async () => {
+        const admin = await createAdmin();
+        await deviceTokenService.registerDeviceToken({ userId: admin._id, token: token('j'), platform: 'android', provider: 'fcm' });
+        const messaging = {
+            sendEachForMulticast: jest.fn().mockRejectedValue(new Error('FCM unavailable')),
+        };
+        fcmService.setMessagingClientForTests(messaging);
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        const notifications = await notificationService.notifyNewManualOrder({});
+
+        expect(notifications).toHaveLength(1);
+        expect(await Notification.countDocuments({ userId: admin._id, source: 'ORDER', link: '/admin/orders' })).toBe(1);
+        await waitFor(() => messaging.sendEachForMulticast.mock.calls.length === 1);
+        errorSpy.mockRestore();
     });
 });

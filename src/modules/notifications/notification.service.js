@@ -47,13 +47,28 @@ const PUSH_EVENT = Object.freeze({
     ORDER_STATUS: { route: '/orders', body: 'تم تحديث حالة طلبك' },
     DEPOSIT_STATUS: { route: '/wallet/topups', body: 'تم تحديث حالة طلب الشحن' },
     TARGET_STATUS: { route: '/target-orders', body: 'تم تحديث حالة طلب التارجت' },
+    ADMIN_ORDER_CREATED: {
+        route: '/admin/orders',
+        title: 'طلب يدوي جديد',
+        body: 'يوجد طلب جديد يحتاج إلى المتابعة',
+    },
+    ADMIN_DEPOSIT_CREATED: {
+        route: '/admin/payments',
+        title: 'طلب شحن جديد',
+        body: 'يوجد طلب شحن جديد يحتاج إلى المراجعة',
+    },
+    ADMIN_TARGET_CREATED: {
+        route: '/admin/target-requests',
+        title: 'طلب تارجت جديد',
+        body: 'يوجد طلب تارجت جديد يحتاج إلى المراجعة',
+    },
 });
 
 const buildPushPayload = (eventType) => {
     const event = PUSH_EVENT[eventType];
     if (!event) return null;
     return {
-        title: 'N&A',
+        title: event.title || 'N&A',
         body: event.body,
         // Data is deliberately limited to a frontend allowlisted event + route.
         // No financial amounts, reasons, user data, or order contents are sent.
@@ -91,7 +106,14 @@ const _safe = (label, fn) => {
  * Used for business events that require operational attention.
  * SAFE: catches its own errors.
  */
-const notifyAdminsAndSupervisors = ({ title, message, type = NOTIFICATION_TYPE.INFO, link = null, source = 'SYSTEM' }) => {
+const notifyAdminsAndSupervisors = ({
+    title,
+    message,
+    type = NOTIFICATION_TYPE.INFO,
+    link = null,
+    source = 'SYSTEM',
+    pushPayload = null,
+}) => {
     return _safe('notifyAdminsAndSupervisors', async () => {
         const recipients = await User.find({
             role: { $in: ['ADMIN', 'SUPERVISOR'] },
@@ -110,7 +132,18 @@ const notifyAdminsAndSupervisors = ({ title, message, type = NOTIFICATION_TYPE.I
             source,
         }));
 
-        return Notification.insertMany(docs, { ordered: false });
+        const notifications = await Notification.insertMany(docs, { ordered: false });
+
+        if (pushPayload) {
+            recipients.forEach(({ _id: userId }) => {
+                // FCM is best effort and never changes the existing in-app result.
+                void sendPushToUser({ userId, payload: pushPayload }).catch((error) => {
+                    console.error(`[Notification] FCM dispatch failed: ${String(error?.code || error?.message || 'unknown error')}`);
+                });
+            });
+        }
+
+        return notifications;
     });
 };
 
@@ -245,6 +278,7 @@ const notifyNewDeposit = (deposit) => {
         type: NOTIFICATION_TYPE.WARNING,
         link: '/admin/payments',
         source: 'DEPOSIT',
+        pushPayload: buildPushPayload('ADMIN_DEPOSIT_CREATED'),
     });
 };
 
@@ -312,6 +346,7 @@ const notifyNewTargetOrder = (order) => {
         type: NOTIFICATION_TYPE.WARNING,
         link: '/admin/target-requests',
         source: 'TARGET',
+        pushPayload: buildPushPayload('ADMIN_TARGET_CREATED'),
     });
 };
 
@@ -362,6 +397,7 @@ const notifyNewManualOrder = (order) => {
         type: NOTIFICATION_TYPE.WARNING,
         link: '/admin/orders',
         source: 'ORDER',
+        pushPayload: buildPushPayload('ADMIN_ORDER_CREATED'),
     });
 };
 
