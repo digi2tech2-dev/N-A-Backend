@@ -114,6 +114,13 @@ const completeGoogleProfileValidation = [
         .isLength({ min: 3, max: 3 }).withMessage('Currency code must be 3 characters'),
 ];
 
+const nativeGoogleValidation = [
+    body('idToken')
+        .notEmpty().withMessage('Google identity credential is required')
+        .isString().withMessage('Google identity credential must be a string')
+        .isLength({ max: 8192 }).withMessage('Google identity credential is invalid'),
+];
+
 module.exports = {
     registerValidation,
     loginValidation,
@@ -122,4 +129,5 @@ module.exports = {
     disable2FAValidation,
     verify2FAValidation,
     completeGoogleProfileValidation,
+    nativeGoogleValidation,
 };

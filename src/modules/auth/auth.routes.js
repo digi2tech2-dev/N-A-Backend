@@ -29,6 +29,7 @@ const {
     disable2FAValidation,
     verify2FAValidation,
     completeGoogleProfileValidation,
+    nativeGoogleValidation,
 } = require('./auth.validation');
 const validate = require('../../shared/middlewares/validate');
 const authenticate = require('../../shared/middlewares/authenticate');
@@ -188,6 +189,19 @@ router.get('/google/failure', (req, res) => {
         code: 'GOOGLE_AUTH_FAILED',
     }));
 });
+
+/**
+ * @route  POST /api/auth/google/native
+ * @desc   Verify a native Android Google ID token and issue the normal N&A response
+ * @access Public
+ */
+router.post(
+    '/google/native',
+    authLimiter,
+    nativeGoogleValidation,
+    validate,
+    authController.nativeGoogleLogin
+);
 
 // ─── Two-Factor Authentication ─────────────────────────────────────────────────────
 

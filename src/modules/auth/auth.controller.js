@@ -132,6 +132,18 @@ const completeGoogleProfile = catchAsync(async (req, res) => {
     sendSuccess(res, result, 'Profile completed successfully.');
 });
 
+/**
+ * POST /api/auth/google/native
+ *
+ * Exchanges an Android Credential Manager Google ID token for N&A's normal
+ * authenticated response. The token is cryptographically verified server-side.
+ */
+const nativeGoogleLogin = catchAsync(async (req, res) => {
+    const { loginWithNativeGoogle } = require('./googleNativeAuth.service');
+    const result = await loginWithNativeGoogle({ idToken: req.body.idToken });
+    sendSuccess(res, result, 'Logged in successfully.');
+});
+
 // ─── Two-Factor Authentication ────────────────────────────────────────────────
 
 /**
@@ -181,6 +193,7 @@ module.exports = {
     resendVerification,
     googleCallback,
     completeGoogleProfile,
+    nativeGoogleLogin,
     generate2FA,
     enable2FA,
     disable2FA,
