@@ -90,6 +90,9 @@ const serializeConnection = (connection, { includePending = true } = {}) => {
         label: connection.label,
         isPrimary: Boolean(connection.isPrimary),
         enabled: Boolean(connection.enabled),
+        // Informational only: callers need to distinguish a local placeholder
+        // from an opaque upstream connection without receiving its identifier.
+        hasConnection: Boolean(connection.connectionId),
         connectionStatus: connection.connectionStatus,
         lastValidatedAt: connection.lastValidatedAt ?? null,
         lastValidationStatus: connection.lastValidationStatus ?? null,

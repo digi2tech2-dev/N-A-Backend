@@ -79,6 +79,42 @@ describe('HagoProviderConnection model and service', () => {
         await expect(service.getHagoProvider(deleted._id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
     });
 
+    it('serializes only connection presence for disconnected and connected records', async () => {
+        const provider = await makeProvider();
+        const service = new HagoConnectionService({ client: makeClient() });
+        await HagoProviderConnection.create({
+            provider: provider._id,
+            isPrimary: true,
+            connectionStatus: CONNECTION_STATUS.UNKNOWN,
+        });
+
+        await expect(service.getConnection(provider._id)).resolves.toMatchObject({
+            connection: { hasConnection: false, connectionStatus: CONNECTION_STATUS.UNKNOWN },
+        });
+
+        const stored = await internalConnection(provider._id);
+        stored.connectionId = 'con_opaque_internal';
+        stored.pendingChallenge = {
+            challengeId: 'chl_internal',
+            deviceId: 'device-internal',
+            expiresAt: new Date(Date.now() + 60_000),
+        };
+        // UNKNOWN is intentionally valid for a real connection whose latest
+        // session validation was inconclusive.
+        await stored.save();
+
+        const connected = await service.getConnection(provider._id);
+        const serialized = JSON.stringify(connected);
+
+        expect(connected.connection).toMatchObject({
+            hasConnection: true,
+            connectionStatus: CONNECTION_STATUS.UNKNOWN,
+        });
+        expect(serialized).not.toContain('con_opaque_internal');
+        expect(serialized).not.toContain('chl_internal');
+        expect(serialized).not.toContain('device-internal');
+    });
+
     it('persists a safe pending login challenge without persisting an OTP or exposing internal identifiers', async () => {
         const provider = await makeProvider();
         const client = makeClient();
