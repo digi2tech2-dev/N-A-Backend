@@ -22,7 +22,13 @@
  *   - Toggle active / deactivate
  */
 
-const { Product, PRICING_MODES, MARKUP_TYPES, computeFinalPrice } = require('./product.model');
+const {
+    Product,
+    PRICING_MODES,
+    PRICING_STRATEGIES,
+    MARKUP_TYPES,
+    computeFinalPrice,
+} = require('./product.model');
 const { ProviderProduct } = require('../providers/providerProduct.model');
 const { isPositive, add, normalizeProviderDecimalPrice } = require('../../shared/utils/decimalPrecision');
 const {
@@ -37,6 +43,32 @@ const getCanonicalProviderProductPrice = (providerProduct) => normalizeProviderD
     ?? providerProduct?.rawPayload?.price
     ?? 0
 );
+
+const isHagoNobilityProviderProduct = (providerProduct) => (
+    providerProduct?.provider?.slug === 'hago'
+    && /^HAGO_NOBILITY_[1-4]$/.test(String(providerProduct?.externalProductId ?? ''))
+);
+
+const assertHagoNobilityConfiguration = ({ providerProduct, pricingMode, minQty, maxQty, hagoNobilityPricing }) => {
+    if (!isHagoNobilityProviderProduct(providerProduct)) {
+        throw new BusinessRuleError(
+            'Hago Nobility readiness pricing may only be used with a Hago Nobility provider product.',
+            'HAGO_NOBILITY_PROVIDER_PRODUCT_REQUIRED'
+        );
+    }
+    if (pricingMode !== PRICING_MODES.MANUAL) {
+        throw new BusinessRuleError('Hago Nobility products must use manual pricing.', 'HAGO_NOBILITY_MANUAL_PRICING_REQUIRED');
+    }
+    if (Number(minQty) !== 1 || Number(maxQty) !== 1) {
+        throw new BusinessRuleError('Hago Nobility quantity must be fixed at 1.', 'HAGO_NOBILITY_FIXED_QUANTITY_REQUIRED');
+    }
+    if (!isPositive(hagoNobilityPricing?.purchaseBasePrice) || !isPositive(hagoNobilityPricing?.renewalBasePrice)) {
+        throw new BusinessRuleError(
+            'Hago Nobility purchase and renewal selling prices must both be positive.',
+            'HAGO_NOBILITY_PRICING_REQUIRED'
+        );
+    }
+};
 
 // =============================================================================
 // USER-FACING QUERIES
@@ -115,6 +147,8 @@ const createProduct = async ({
     provider = null,
     providerProduct = null,
     pricingMode = PRICING_MODES.MANUAL,
+    pricingStrategy = PRICING_STRATEGIES.STANDARD,
+    hagoNobilityPricing = null,
     markupType = MARKUP_TYPES.PERCENTAGE,
     markupValue = 0,
 }, adminUserId = null) => {
@@ -123,6 +157,22 @@ const createProduct = async ({
 
     if (Number(maxQty) < Number(minQty)) {
         throw new BusinessRuleError('maxQty must be >= minQty.', 'INVALID_QTY_RANGE');
+    }
+
+    let linkedProviderProduct = null;
+    if (providerProduct) {
+        linkedProviderProduct = await ProviderProduct.findById(providerProduct)
+            .populate('provider', 'slug');
+    }
+
+    if (pricingStrategy === PRICING_STRATEGIES.HAGO_NOBILITY_READINESS) {
+        assertHagoNobilityConfiguration({
+            providerProduct: linkedProviderProduct,
+            pricingMode,
+            minQty,
+            maxQty,
+            hagoNobilityPricing,
+        });
     }
 
     // If a provider link is supplied, default executionType to 'automatic'
@@ -137,12 +187,16 @@ const createProduct = async ({
 
     if (providerProduct) {
         // Fetch provider product's raw price for markup calculation
-        const pp = await ProviderProduct.findById(providerProduct).select('rawPrice rawPayload');
+        const pp = linkedProviderProduct ?? await ProviderProduct.findById(providerProduct).select('rawPrice rawPayload');
         if (pp) {
             const effectiveRawPrice = getCanonicalProviderProductPrice(pp);
             resolvedProviderPrice = effectiveRawPrice;
 
-            if (pricingMode === PRICING_MODES.SYNC) {
+            if (pricingStrategy === PRICING_STRATEGIES.HAGO_NOBILITY_READINESS) {
+                resolvedProviderPrice = null;
+                resolvedBasePrice = String(hagoNobilityPricing.purchaseBasePrice);
+                resolvedFinalPrice = resolvedBasePrice;
+            } else if (pricingMode === PRICING_MODES.SYNC) {
                 resolvedFinalPrice = computeFinalPrice(resolvedProviderPrice, markupType, markupValue);
                 resolvedBasePrice = resolvedFinalPrice ?? resolvedProviderPrice;
             } else if (markupValue > 0) {
@@ -177,6 +231,8 @@ const createProduct = async ({
         showAccountNumber,
         isActive,
         pricingMode,
+        pricingStrategy,
+        hagoNobilityPricing,
         markupType,
         markupValue,
         executionType: resolvedExecutionType,
@@ -226,6 +282,8 @@ const publishFromProviderProduct = async ({
     showAccountNumber = false,
     isActive = true,
     pricingMode = PRICING_MODES.MANUAL,
+    pricingStrategy = PRICING_STRATEGIES.STANDARD,
+    hagoNobilityPricing = null,
     markupType = MARKUP_TYPES.PERCENTAGE,
     markupValue = 0,
     executionType = 'automatic',
@@ -252,6 +310,16 @@ const publishFromProviderProduct = async ({
         );
     }
 
+    if (pricingStrategy === PRICING_STRATEGIES.HAGO_NOBILITY_READINESS) {
+        assertHagoNobilityConfiguration({
+            providerProduct: pp,
+            pricingMode,
+            minQty: minQty ?? pp.minQty,
+            maxQty: maxQty ?? pp.maxQty,
+            hagoNobilityPricing,
+        });
+    }
+
     // ── Prevent duplicate publish ─────────────────────────────────────────────
     const alreadyPublished = await Product.findOne({ providerProduct: providerProductId });
     if (alreadyPublished) {
@@ -268,7 +336,10 @@ const publishFromProviderProduct = async ({
     let resolvedFinalPrice;
     let resolvedBasePrice;
 
-    if (pricingMode === PRICING_MODES.SYNC) {
+    if (pricingStrategy === PRICING_STRATEGIES.HAGO_NOBILITY_READINESS) {
+        resolvedFinalPrice = String(hagoNobilityPricing.purchaseBasePrice);
+        resolvedBasePrice = resolvedFinalPrice;
+    } else if (pricingMode === PRICING_MODES.SYNC) {
         // Compute from providerPrice + markup; basePrice tracks it forever
         resolvedFinalPrice = computeFinalPrice(providerPrice, markupType, markupValue);
         resolvedBasePrice = resolvedFinalPrice ?? providerPrice;
@@ -296,7 +367,7 @@ const publishFromProviderProduct = async ({
         name,
         description,
         basePrice: resolvedBasePrice,
-        providerPrice,
+        providerPrice: pricingStrategy === PRICING_STRATEGIES.HAGO_NOBILITY_READINESS ? null : providerPrice,
         finalPrice: resolvedFinalPrice,
         minQty: minQty ?? pp.minQty,
         maxQty: maxQty ?? pp.maxQty,
@@ -307,6 +378,8 @@ const publishFromProviderProduct = async ({
         showAccountNumber,
         isActive,
         pricingMode,
+        pricingStrategy,
+        hagoNobilityPricing,
         markupType,
         markupValue,
         executionType,
@@ -347,7 +420,7 @@ const updateProduct = async (productId, updates) => {
     const ALLOWED = [
         'name', 'description', 'image', 'category', 'displayOrder', 'isActive',
         'displayAccountNumber', 'showAccountNumber',
-        'basePrice', 'minQty', 'maxQty', 'pricingMode', 'markupType', 'markupValue',
+        'basePrice', 'minQty', 'maxQty', 'pricingMode', 'pricingStrategy', 'hagoNobilityPricing', 'markupType', 'markupValue',
         'executionType', 'costPrice', 'orderFields', 'dynamicFields', 'providerMapping',
         'provider', 'providerProduct',
         'syncPriceWithProvider', 'enableManualPrice', 'manualPriceAdjustment', 'finalPrice',
@@ -358,6 +431,7 @@ const updateProduct = async (productId, updates) => {
 
     // ── Determine effective pricing fields ────────────────────────────────
     const effectivePricingMode = safe.pricingMode ?? product.pricingMode;
+    const effectivePricingStrategy = safe.pricingStrategy ?? product.pricingStrategy;
     const effectiveMarkupType = safe.markupType ?? product.markupType;
     const effectiveMarkupValue = safe.markupValue ?? product.markupValue;
 
@@ -365,6 +439,31 @@ const updateProduct = async (productId, updates) => {
     const markupChanged = safe.markupType != null || safe.markupValue != null;
     const basePriceChanged = safe.basePrice != null;
     const hasProviderLink = product.providerProduct != null;
+
+    if (effectivePricingStrategy === PRICING_STRATEGIES.HAGO_NOBILITY_READINESS) {
+        let linkedProviderProduct = product.providerProduct;
+        if (safe.providerProduct && String(safe.providerProduct) !== String(product.providerProduct?._id ?? product.providerProduct)) {
+            linkedProviderProduct = await ProviderProduct.findById(safe.providerProduct).populate('provider', 'slug');
+        } else if (linkedProviderProduct && !linkedProviderProduct.provider?.slug) {
+            linkedProviderProduct = await ProviderProduct.findById(linkedProviderProduct._id ?? linkedProviderProduct)
+                .populate('provider', 'slug');
+        }
+        const pricing = safe.hagoNobilityPricing ?? product.hagoNobilityPricing;
+        assertHagoNobilityConfiguration({
+            providerProduct: linkedProviderProduct,
+            pricingMode: effectivePricingMode,
+            minQty: safe.minQty ?? product.minQty,
+            maxQty: safe.maxQty ?? product.maxQty,
+            hagoNobilityPricing: pricing,
+        });
+        safe.pricingMode = PRICING_MODES.MANUAL;
+        safe.syncPriceWithProvider = false;
+        safe.minQty = 1;
+        safe.maxQty = 1;
+        safe.providerPrice = null;
+        safe.basePrice = String(pricing.purchaseBasePrice);
+        safe.finalPrice = safe.basePrice;
+    }
 
     // ── Fix 5 — Safety net: provider link changed ─────────────────────────
     //
@@ -381,7 +480,7 @@ const updateProduct = async (productId, updates) => {
     const providerLinkChanged = incomingProviderProduct != null
         && String(incomingProviderProduct) !== currentProviderProductId;
 
-    if (providerLinkChanged) {
+    if (providerLinkChanged && effectivePricingStrategy !== PRICING_STRATEGIES.HAGO_NOBILITY_READINESS) {
         const newPP = await ProviderProduct.findById(incomingProviderProduct)
             .select('rawPrice rawPayload provider');
         if (newPP) {
@@ -401,7 +500,8 @@ const updateProduct = async (productId, updates) => {
 
     // ── Recompute pricing ────────────────────────────────────────────────
     // Skip recomputation if we already handled this in the safety-net above.
-    if (!providerLinkChanged && effectivePricingMode === PRICING_MODES.SYNC && hasProviderLink) {
+    if (effectivePricingStrategy !== PRICING_STRATEGIES.HAGO_NOBILITY_READINESS
+        && !providerLinkChanged && effectivePricingMode === PRICING_MODES.SYNC && hasProviderLink) {
         // SYNC mode: always compute from providerPrice + markup
         if (pricingModeChanged || markupChanged) {
             const pp = product.providerProduct;
@@ -412,7 +512,8 @@ const updateProduct = async (productId, updates) => {
             safe.finalPrice = newFinalPrice;
             safe.basePrice = newFinalPrice ?? rawPrice;
         }
-    } else if (!providerLinkChanged && effectivePricingMode === PRICING_MODES.MANUAL) {
+    } else if (effectivePricingStrategy !== PRICING_STRATEGIES.HAGO_NOBILITY_READINESS
+        && !providerLinkChanged && effectivePricingMode === PRICING_MODES.MANUAL) {
         // MANUAL mode: admin controls basePrice
         if (basePriceChanged && !markupChanged) {
             // Admin directly set a basePrice — use it as-is
@@ -445,7 +546,8 @@ const updateProduct = async (productId, updates) => {
     const effectiveEnableManual = safe.enableManualPrice ?? product.enableManualPrice;
     const effectiveManualAdj = safe.manualPriceAdjustment ?? product.manualPriceAdjustment ?? 0;
 
-    if (!providerLinkChanged && effectiveEnableManual && hasProviderLink) {
+    if (effectivePricingStrategy !== PRICING_STRATEGIES.HAGO_NOBILITY_READINESS
+        && !providerLinkChanged && effectiveEnableManual && hasProviderLink) {
         const pp = product.providerProduct;
         const effectiveRawPrice = getCanonicalProviderProductPrice(pp);
         const rawPrice = effectiveRawPrice;
@@ -533,6 +635,7 @@ module.exports = {
     createProduct,
     publishFromProviderProduct,
     updateProduct,
+    isHagoNobilityProviderProduct,
     toggleProductStatus,
     deleteProduct,
     getExternalProductId,
@@ -541,4 +644,3 @@ module.exports = {
     createProductFromProvider: publishFromProviderProduct,  // prompt-specified name
     toggleProduct: toggleProductStatus,                     // prompt-specified name
 };
-

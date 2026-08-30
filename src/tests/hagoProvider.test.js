@@ -5,6 +5,7 @@ jest.mock('axios');
 const axios = require('axios');
 const { Provider } = require('../modules/providers/provider.model');
 const { ProviderProduct } = require('../modules/providers/providerProduct.model');
+const { Product, PRICING_MODES, PRICING_STRATEGIES } = require('../modules/products/product.model');
 const { HagoClient, HagoClientError } = require('../modules/providers/hago/hago.client');
 const { HagoAdapter, buildSyntheticProducts } = require('../modules/providers/adapters/hago.adapter');
 const { getProviderAdapter } = require('../modules/providers/adapters/adapter.factory');
@@ -189,6 +190,9 @@ describe('Hago adapter', () => {
             expect.objectContaining({ rawPrice: '0', minQty: 1, maxQty: null }),
         ]));
         expect(products.slice(2).every((product) => product.minQty === 1 && product.maxQty === 1)).toBe(true);
+        expect(products.slice(2).map((product) => product.rawName)).toEqual([
+            'Hago Knight', 'Hago Viscount', 'Hago Earl', 'Hago Duke',
+        ]);
         expect(products.every((product) => product.rawPayload.pricing === 'manual_n_and_a_configuration_required')).toBe(true);
     });
 
@@ -211,6 +215,26 @@ describe('Hago adapter', () => {
         expect(products).toHaveLength(6);
         expect(diamond).toMatchObject({ rawPrice: '0', minQty: 1, maxQty: null });
         expect(products.filter((product) => product.externalProductId === 'HAGO_DIAMOND_AMOUNT')).toHaveLength(1);
+    });
+
+    it('never propagates the Hago Nobility zero-price sentinel into configured product pricing', async () => {
+        const hago = await Provider.create({
+            name: 'Hago Price Guard', slug: 'hago', baseUrl: 'https://provider.invalid', isActive: true, syncInterval: 0,
+        });
+        await syncProviderProducts(hago._id);
+        const pp = await ProviderProduct.findOne({ provider: hago._id, externalProductId: 'HAGO_NOBILITY_1' });
+        const product = await Product.create({
+            name: 'Configured Hago Knight', basePrice: '100', minQty: 1, maxQty: 1,
+            provider: hago._id, providerProduct: pp._id,
+            pricingMode: PRICING_MODES.MANUAL,
+            pricingStrategy: PRICING_STRATEGIES.HAGO_NOBILITY_READINESS,
+            hagoNobilityPricing: { purchaseBasePrice: '100', renewalBasePrice: '50' },
+        });
+
+        await syncProviderProducts(hago._id);
+        const refreshed = await Product.findById(product._id);
+        expect(refreshed.basePrice).toBe('100');
+        expect(refreshed.providerPrice).toBeNull();
     });
 
     it('maps validateUser to V2 target verification and returns only normalized safe fields', async () => {

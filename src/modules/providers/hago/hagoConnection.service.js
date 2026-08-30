@@ -409,6 +409,8 @@ module.exports = {
     hagoConnectionService,
     serializeConnection,
     normalizeSession,
+    normalizeIdentity,
+    normalizeWallet,
     validateChallengeRequest,
     validateOtpRequest,
 };

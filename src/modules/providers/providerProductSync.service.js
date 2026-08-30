@@ -46,7 +46,7 @@
 
 const { Provider } = require('./provider.model');
 const { ProviderProduct } = require('./providerProduct.model');
-const { Product, PRICING_MODES, computeFinalPrice } = require('../products/product.model');
+const { Product, PRICING_MODES, PRICING_STRATEGIES, computeFinalPrice } = require('../products/product.model');
 const { getProviderAdapter } = require('./adapters/adapter.factory');
 const { NotFoundError, BusinessRuleError } = require('../../shared/errors/AppError');
 const { normalizeProviderDecimalPrice } = require('../../shared/utils/decimalPrecision');
@@ -315,6 +315,7 @@ const _performSync = async (provider, adapterOptions) => {
             const products = await Product.find({
                 providerProduct: providerProductId,
                 pricingMode: PRICING_MODES.SYNC,
+                pricingStrategy: { $ne: PRICING_STRATEGIES.HAGO_NOBILITY_READINESS },
             }).select('markupType markupValue');
 
             for (const product of products) {

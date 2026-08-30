@@ -9,6 +9,7 @@ const {
     publishProductValidation,
     updateProductValidation,
     verifyFieldValidation,
+    hagoNobilityReadinessValidation,
 } = require('./product.validation');
 const validate = require('../../shared/middlewares/validate');
 const authenticate = require('../../shared/middlewares/authenticate');
@@ -53,6 +54,13 @@ router.post(
     authenticate,
     verifyFieldValidation, validate,
     productController.verifyField
+);
+
+router.post(
+    '/:id/hago-nobility/readiness',
+    authenticate,
+    hagoNobilityReadinessValidation, validate,
+    productController.hagoNobilityReadiness
 );
 
 // ─── Admin only ───────────────────────────────────────────────────────────────

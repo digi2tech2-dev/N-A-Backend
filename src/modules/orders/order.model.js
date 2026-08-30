@@ -287,6 +287,28 @@ const orderSchema = new mongoose.Schema(
         },
 
         /**
+         * Reserved, provider-safe execution snapshot for the future controlled
+         * Hago Nobility mutation phase. Phase 1 never creates an executable
+         * order or stores upstream session material here.
+         */
+        hagoNobility: {
+            selectedType: { type: Number, min: 1, max: 4, default: null },
+            selectedName: { type: String, default: null },
+            requestedTargetId: { type: String, default: null },
+            operation: { type: String, enum: ['PURCHASE', 'RENEW'], default: null },
+            readinessAt: { type: Date, default: null },
+            readinessConfigFingerprint: { type: String, default: null },
+            providerDiamondCost: { type: Number, default: null, min: 0 },
+            providerCostCurrency: { type: String, default: null },
+            pricingBranch: { type: String, enum: ['purchase', 'renewal'], default: null },
+            branchBasePrice: { type: String, default: null },
+            connectionRef: { type: mongoose.Schema.Types.ObjectId, ref: 'HagoProviderConnection', default: null },
+            mutationState: { type: String, default: null },
+            providerMutationKey: { type: String, default: null },
+            providerTransactionId: { type: String, default: null },
+        },
+
+        /**
          * Number of status-check attempts made by the cron job.
          * When retryCount >= MAX_RETRY_COUNT the order is force-failed.
          */

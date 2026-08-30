@@ -3,6 +3,7 @@
 const productService = require('./product.service');
 const { Product } = require('./product.model');
 const { getProviderAdapter } = require('../providers/adapters/adapter.factory');
+const { hagoNobilityCommerceService } = require('../providers/hago/hagoNobilityCommerce.service');
 const { sendSuccess, sendCreated, sendPaginated } = require('../../shared/utils/apiResponse');
 const catchAsync = require('../../shared/utils/catchAsync');
 
@@ -13,6 +14,7 @@ const SENSITIVE_FIELDS = [
     'markupType',
     'markupValue',
     'pricingMode',
+    'hagoNobilityPricing',
     'provider',
     'providerProduct',
     'providerMapping',
@@ -146,6 +148,20 @@ const verifyField = catchAsync(async (req, res) => {
     }
 });
 
+/**
+ * POST /api/products/:id/hago-nobility/readiness
+ * Read-only, user-bound Nobility readiness and price quote. It intentionally
+ * does not create an order or invoke an Hago financial endpoint.
+ */
+const hagoNobilityReadiness = catchAsync(async (req, res) => {
+    const result = await hagoNobilityCommerceService.createReadinessQuote({
+        userId: req.user._id,
+        productId: req.params.id,
+        targetId: req.body.targetId,
+    });
+    sendSuccess(res, result.quote, 'Hago Nobility readiness retrieved successfully.');
+});
+
 // ─── Admin only ───────────────────────────────────────────────────────────────
 
 /**
@@ -193,4 +209,5 @@ module.exports = {
     updateProduct,
     toggleStatus,
     verifyField,
+    hagoNobilityReadiness,
 };

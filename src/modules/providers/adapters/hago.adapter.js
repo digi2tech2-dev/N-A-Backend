@@ -43,9 +43,14 @@ const buildSyntheticProducts = () => [
         minQty: 1,
         metadata: { serviceType: 'CRYSTAL', amountMode: 'dynamic' },
     }),
-    ...[1, 2, 3, 4].map((nobilityType) => nonPricedProduct({
+    ...[
+        [1, 'Knight'],
+        [2, 'Viscount'],
+        [3, 'Earl'],
+        [4, 'Duke'],
+    ].map(([nobilityType, levelName]) => nonPricedProduct({
         externalProductId: `HAGO_NOBILITY_${nobilityType}`,
-        rawName: `Hago Nobility Type ${nobilityType}`,
+        rawName: `Hago ${levelName}`,
         minQty: 1,
         maxQty: 1,
         metadata: { serviceType: 'NOBILITY', nobilityType, amountMode: 'fixed' },

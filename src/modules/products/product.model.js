@@ -12,6 +12,11 @@ const PRICING_MODES = Object.freeze({
     SYNC: 'sync',     // auto-updated on each sync run
 });
 
+const PRICING_STRATEGIES = Object.freeze({
+    STANDARD: 'standard',
+    HAGO_NOBILITY_READINESS: 'hago_nobility_readiness',
+});
+
 /** How the markup is applied on top of the provider cost. */
 const MARKUP_TYPES = Object.freeze({
     PERCENTAGE: 'percentage',  // finalPrice = providerPrice * (1 + markupValue/100)
@@ -204,6 +209,31 @@ const productSchema = new mongoose.Schema(
             type: String,
             enum: Object.values(PRICING_MODES),
             default: PRICING_MODES.MANUAL,
+        },
+
+        /**
+         * Hago Nobility selects an admin-set sale-price branch only after a
+         * read-only readiness result. Standard products keep static pricing.
+         */
+        pricingStrategy: {
+            type: String,
+            enum: Object.values(PRICING_STRATEGIES),
+            default: PRICING_STRATEGIES.STANDARD,
+        },
+
+        hagoNobilityPricing: {
+            purchaseBasePrice: {
+                type: String,
+                default: null,
+                get: (v) => v != null ? String(v) : null,
+                set: (v) => v != null ? String(v) : null,
+            },
+            renewalBasePrice: {
+                type: String,
+                default: null,
+                get: (v) => v != null ? String(v) : null,
+                set: (v) => v != null ? String(v) : null,
+            },
         },
 
         /**
@@ -470,11 +500,24 @@ productSchema.index({ isActive: 1 });
 productSchema.index({ provider: 1, isActive: 1 });        // provider product listings
 productSchema.index({ providerProduct: 1 });               // price-sync: find Products by ProviderProduct
 productSchema.index({ pricingMode: 1, provider: 1 });     // price-sync: find 'sync' mode candidates
+productSchema.index({ pricingStrategy: 1, provider: 1 });
 productSchema.index({ isActive: 1, displayOrder: 1 });    // user-facing product list
 productSchema.index({ deletedAt: 1 }, { sparse: true });   // fast filter for non-deleted products
 
 productSchema.pre('save', async function (next) {
     try {
+        if (this.pricingStrategy === PRICING_STRATEGIES.HAGO_NOBILITY_READINESS) {
+            if (this.pricingMode !== PRICING_MODES.MANUAL) {
+                return next(new Error('Hago Nobility products must use manual pricingMode.'));
+            }
+            if (this.minQty !== 1 || this.maxQty !== 1) {
+                return next(new Error('Hago Nobility products must have quantity fixed at 1.'));
+            }
+            if (!isPositive(this.hagoNobilityPricing?.purchaseBasePrice)
+                || !isPositive(this.hagoNobilityPricing?.renewalBasePrice)) {
+                return next(new Error('Hago Nobility products require positive purchase and renewal base prices.'));
+            }
+        }
         if (this.isNew && !this.compatProductId) {
             this.compatProductId = await getNextSequence('compatProductId', 999);
         }
@@ -505,6 +548,7 @@ const Product = mongoose.model('Product', productSchema);
 module.exports = {
     Product,
     PRICING_MODES,
+    PRICING_STRATEGIES,
     MARKUP_TYPES,
     EXECUTION_TYPES,
     FIELD_TYPES,

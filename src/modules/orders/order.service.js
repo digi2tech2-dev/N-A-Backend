@@ -2,7 +2,7 @@
 
 const mongoose = require('mongoose');
 const crypto = require('crypto');
-const { Product, computeFinalPrice } = require('../products/product.model');
+const { Product, PRICING_STRATEGIES, computeFinalPrice } = require('../products/product.model');
 const { Provider } = require('../providers/provider.model');
 const { ProviderProduct } = require('../providers/providerProduct.model');
 const { Order, ORDER_STATUS, ORDER_EXECUTION_TYPES } = require('./order.model');
@@ -562,6 +562,15 @@ const _attemptCreateOrder = async (
         if (!product) throw new NotFoundError('Product');
         if (!product.isActive) {
             throw new BusinessRuleError('This product is currently unavailable.', 'PRODUCT_INACTIVE');
+        }
+        // Readiness quotes are deliberately preview-only in Hago Nobility
+        // Phase 1. Reject before quantity, pricing, wallet debit, or generic
+        // provider fulfillment can run.
+        if (product.pricingStrategy === PRICING_STRATEGIES.HAGO_NOBILITY_READINESS) {
+            throw new BusinessRuleError(
+                'Hago Nobility checkout is not enabled yet.',
+                'HAGO_NOBILITY_CHECKOUT_NOT_ENABLED'
+            );
         }
 
         // ── 2. Validate Quantity Bounds ────────────────────────────────────────

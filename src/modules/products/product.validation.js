@@ -1,7 +1,13 @@
 'use strict';
 
 const { body, param, query } = require('express-validator');
-const { PRICING_MODES, MARKUP_TYPES, EXECUTION_TYPES, DYNAMIC_FIELD_TYPES } = require('./product.model');
+const {
+    PRICING_MODES,
+    PRICING_STRATEGIES,
+    MARKUP_TYPES,
+    EXECUTION_TYPES,
+    DYNAMIC_FIELD_TYPES,
+} = require('./product.model');
 const { isPositive } = require('../../shared/utils/decimalPrecision');
 
 /**
@@ -39,6 +45,24 @@ const validateDynamicFields = (fields = []) => {
 };
 
 const emptyStringToZero = (value) => (value === '' ? 0 : value);
+
+const hagoNobilityPricingValidation = [
+    body('pricingStrategy')
+        .optional()
+        .isIn(Object.values(PRICING_STRATEGIES))
+        .withMessage(`pricingStrategy must be one of: ${Object.values(PRICING_STRATEGIES).join(', ')}`),
+    body('hagoNobilityPricing')
+        .optional({ nullable: true })
+        .isObject().withMessage('hagoNobilityPricing must be an object'),
+    body('hagoNobilityPricing.purchaseBasePrice')
+        .optional({ nullable: true })
+        .custom((v) => v == null || isPositiveDecimalString(v))
+        .withMessage('purchaseBasePrice must be > 0'),
+    body('hagoNobilityPricing.renewalBasePrice')
+        .optional({ nullable: true })
+        .custom((v) => v == null || isPositiveDecimalString(v))
+        .withMessage('renewalBasePrice must be > 0'),
+];
 
 // ─── User-facing / shared validation ─────────────────────────────────────────
 
@@ -150,6 +174,8 @@ const createProductValidation = [
         .optional()
         .custom((v) => v == null || !isNaN(Number(v))).withMessage('manualPriceAdjustment must be a valid decimal'),
 
+    ...hagoNobilityPricingValidation,
+
     body('dynamicFields')
         .optional()
         .isArray().withMessage('dynamicFields must be an array')
@@ -257,6 +283,8 @@ const publishProductValidation = [
         .optional()
         .isIn(Object.values(EXECUTION_TYPES))
         .withMessage(`executionType must be one of: ${Object.values(EXECUTION_TYPES).join(', ')}`),
+
+    ...hagoNobilityPricingValidation,
 
     body('dynamicFields')
         .optional()
@@ -371,6 +399,8 @@ const updateProductValidation = [
         .optional()
         .custom((v) => v == null || !isNaN(Number(v))).withMessage('manualPriceAdjustment must be a valid decimal'),
 
+    ...hagoNobilityPricingValidation,
+
     body('executionType')
         .optional()
         .isIn(Object.values(EXECUTION_TYPES))
@@ -423,6 +453,14 @@ const verifyFieldValidation = [
         .isLength({ max: 120 }).withMessage('fieldValue cannot exceed 120 characters'),
 ];
 
+const hagoNobilityReadinessValidation = [
+    param('id').isMongoId().withMessage('Invalid product ID'),
+    body('targetId')
+        .trim()
+        .notEmpty().withMessage('targetId is required')
+        .isLength({ max: 120 }).withMessage('targetId cannot exceed 120 characters'),
+];
+
 module.exports = {
     productIdParam,
     listProductsValidation,
@@ -430,4 +468,5 @@ module.exports = {
     publishProductValidation,
     updateProductValidation,
     verifyFieldValidation,
+    hagoNobilityReadinessValidation,
 };
