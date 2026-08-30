@@ -26,6 +26,8 @@
 
 const cron = require('node-cron');
 const { pollPendingOrders } = require('./orderPolling.service');
+const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
+const { refundFailedOrder } = require('./orderFulfillment.service');
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -69,6 +71,12 @@ const runOrderPolling = async (options = {}) => {
         console.log('[OrderPollingJob] Starting order status poll…');
 
         const stats = await pollPendingOrders(options);
+        // Hago records without a generic providerOrderId are intentionally not
+        // eligible for generic polling. This bounded, read-only pass only
+        // queries already-recorded Hago transaction evidence; it never sends
+        // a mutation or retries an UNKNOWN operation.
+        const hagoReconciliations = await new HagoFinancialExecutionService({ refundFailedOrder })
+            .reconcileScheduled({ limit: 20 });
         const elapsedMs = Date.now() - startedAt;
 
         // ── Summary log ───────────────────────────────────────────────────────
@@ -109,6 +117,7 @@ const runOrderPolling = async (options = {}) => {
             errors: stats.errors,
             polledAt: stats.polledAt,
             elapsedMs,
+            hagoReconciliations: hagoReconciliations.length,
         };
 
     } catch (err) {
@@ -123,6 +132,7 @@ const runOrderPolling = async (options = {}) => {
             errors: [err.message],
             polledAt: new Date(),
             elapsedMs,
+            hagoReconciliations: hagoReconciliations.length,
         };
     } finally {
         _running = false;

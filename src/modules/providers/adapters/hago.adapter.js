@@ -11,6 +11,7 @@ const HAGO_SUPPORTED_FEATURES = Object.freeze([
     'sessionValidation',
     'previews',
     'reconciliation',
+    'controlledDiamondCrystalExecution',
 ]);
 
 const nonPricedProduct = ({ externalProductId, rawName, minQty, maxQty, metadata }) => ({
@@ -127,6 +128,23 @@ class HagoAdapter extends BaseProviderAdapter {
             errorCode: 'HAGO_MUTATIONS_DISABLED',
             errorMessage: 'Hago financial mutations are disabled.',
         };
+    }
+
+    /**
+     * Not part of BaseAdapter.placeOrder: the generic fulfillment engine does
+     * not have Hago's ambiguity/idempotency safety contract. This method is
+     * only called by the scoped Hago financial executor.
+     */
+    async executeControlledRecharge({ serviceType, connectionId, targetId, amount, idempotencyKey }) {
+        if (serviceType === 'DIAMOND') {
+            return this.client.diamondRecharge(connectionId, { targetId, amount, idempotencyKey });
+        }
+        if (serviceType === 'CRYSTAL') {
+            return this.client.crystalRecharge(connectionId, { targetId, amount, idempotencyKey });
+        }
+        throw new HagoClientError('This Hago service is not enabled for financial execution.', {
+            code: 'HAGO_MUTATIONS_DISABLED',
+        });
     }
 }
 

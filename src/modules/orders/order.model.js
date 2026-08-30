@@ -17,6 +17,19 @@ const ORDER_EXECUTION_TYPES = Object.freeze({
     AUTOMATIC: 'automatic',    // ← NEW: goes through provider fulfillment engine
 });
 
+// Hago Diamond/Crystal is deliberately separate from the generic provider
+// lifecycle. A financial request can be ambiguous after it leaves N&A, so an
+// UNKNOWN outcome must never fall through to the generic FAILED/refund path.
+const HAGO_FINANCIAL_MUTATION_STATES = Object.freeze({
+    READY: 'READY',
+    CLAIMED: 'CLAIMED',
+    SENT: 'SENT',
+    SUCCESS: 'SUCCESS',
+    FAILED: 'FAILED',
+    PENDING: 'PENDING',
+    UNKNOWN: 'UNKNOWN',
+});
+
 /**
  * Maximum number of automatic status-poll retries before the kill switch fires.
  * At a 5-minute cron cadence, 24 retries ≈ 2 hours of polling.
@@ -309,6 +322,29 @@ const orderSchema = new mongoose.Schema(
         },
 
         /**
+         * Internal, service-scoped execution evidence for controlled Hago
+         * Diamond/Crystal transfers. It intentionally stores the local
+         * connection reference only -- never the opaque upstream connectionId.
+         */
+        hagoFinancial: {
+            serviceType: { type: String, enum: ['DIAMOND', 'CRYSTAL'], default: null },
+            requestedTargetId: { type: String, default: null },
+            providerAmount: { type: Number, default: null, min: 1 },
+            connectionRef: { type: mongoose.Schema.Types.ObjectId, ref: 'HagoProviderConnection', default: null, select: false },
+            providerMutationKey: { type: String, default: null, select: false },
+            mutationState: { type: String, enum: Object.values(HAGO_FINANCIAL_MUTATION_STATES), default: null },
+            claimedAt: { type: Date, default: null },
+            sentAt: { type: Date, default: null },
+            outcomeAt: { type: Date, default: null },
+            providerTransactionId: { type: String, default: null, select: false },
+            providerStatus: { type: String, default: null },
+            providerCode: { type: String, default: null },
+            lastReconciledAt: { type: Date, default: null },
+            reconciliationAttempts: { type: Number, default: 0, min: 0 },
+            unknownReason: { type: String, default: null },
+        },
+
+        /**
          * Number of status-check attempts made by the cron job.
          * When retryCount >= MAX_RETRY_COUNT the order is force-failed.
          */
@@ -415,6 +451,11 @@ orderSchema.index(
     { unique: true, sparse: true, name: 'unique_user_idempotency_key' }
 );
 
+orderSchema.index(
+    { status: 1, providerCode: 1, 'hagoFinancial.mutationState': 1, 'hagoFinancial.lastReconciledAt': 1 },
+    { name: 'hago_financial_reconciliation_queue' }
+);
+
 /**
  * Cron-job query index:
  * Efficiently find orders that are PROCESSING and have a provider order ID.
@@ -428,4 +469,10 @@ orderSchema.index(
 
 const Order = mongoose.model('Order', orderSchema);
 
-module.exports = { Order, ORDER_STATUS, ORDER_EXECUTION_TYPES, MAX_RETRY_COUNT };
+module.exports = {
+    Order,
+    ORDER_STATUS,
+    ORDER_EXECUTION_TYPES,
+    HAGO_FINANCIAL_MUTATION_STATES,
+    MAX_RETRY_COUNT,
+};

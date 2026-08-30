@@ -283,6 +283,23 @@ const executeOrder = async (orderId, provider = null, auditContext = null) => {
         return { order, placed: false, refunded: false };
     }
 
+    // Hago Diamond/Crystal has a separate financial safety boundary. Never
+    // let it enter the generic adapter exception/result path below: that path
+    // can classify unexpected errors as FAILED and issue a refund, which is
+    // unsafe once a financial request may have reached Hago.
+    if (order.providerCode === 'hago' && order.hagoFinancial?.serviceType) {
+        const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
+        const hagoFinancial = new HagoFinancialExecutionService({ refundFailedOrder });
+        try {
+            const result = await hagoFinancial.execute(orderId);
+            if (result.handled) return result;
+        } catch (error) {
+            console.error(`[Fulfillment] Hago financial execution could not be resolved for ${orderId}:`, error.message);
+            const unknownOrder = await hagoFinancial.markUnexpectedExecutionError(orderId);
+            return { order: unknownOrder, placed: false, refunded: false };
+        }
+    }
+
     const actorId = auditContext?.actorId ?? order.userId;
     const actorRole = auditContext?.actorRole ?? ACTOR_ROLES.SYSTEM;
     const ipAddress = auditContext?.ipAddress ?? null;

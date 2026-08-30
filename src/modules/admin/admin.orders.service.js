@@ -15,6 +15,7 @@ const { Provider } = require('../providers/provider.model');
 const { NotFoundError, BusinessRuleError } = require('../../shared/errors/AppError');
 const { createAuditLog } = require('../audit/audit.service');
 const { ADMIN_ACTIONS, ENTITY_TYPES, ACTOR_ROLES } = require('../audit/audit.constants');
+const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
 
 const resolveAuditContext = (adminId, auditContext = null) => ({
     actorId: auditContext?.actorId ?? adminId,
@@ -22,6 +23,16 @@ const resolveAuditContext = (adminId, auditContext = null) => ({
     ipAddress: auditContext?.ipAddress ?? null,
     userAgent: auditContext?.userAgent ?? null,
 });
+
+const assertHagoFinancialNotUnresolved = (order, action) => {
+    const hagoFinancial = new HagoFinancialExecutionService();
+    if (hagoFinancial.isRefundBlocked(order)) {
+        throw new BusinessRuleError(
+            `Hago financial ${action} is blocked until read-only reconciliation proves the provider outcome.`,
+            'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
+        );
+    }
+};
 
 // ─── List (admin) ─────────────────────────────────────────────────────────────
 
@@ -133,6 +144,13 @@ const retryOrder = async (orderId, adminId, auditContext = null) => {
 
     if (!order) throw new NotFoundError('Order');
 
+    if (order.hagoFinancial?.serviceType) {
+        throw new BusinessRuleError(
+            'Hago financial orders cannot be retried through the generic provider retry path.',
+            'HAGO_FINANCIAL_RETRY_NOT_SUPPORTED'
+        );
+    }
+
     if (order.status !== ORDER_STATUS.FAILED) {
         throw new BusinessRuleError(
             `Only FAILED orders can be retried. Current status: ${order.status}`,
@@ -198,6 +216,8 @@ const refundOrder = async (orderId, adminId, remains = 0, auditContext = null) =
     const order = await Order.findById(orderId);
     if (!order) throw new NotFoundError('Order');
 
+    assertHagoFinancialNotUnresolved(order, 'refund');
+
     // Guard: already refunded
     if (order.refunded === true) {
         throw new BusinessRuleError('A refund has already been issued for this order.', 'ALREADY_REFUNDED');
@@ -259,6 +279,13 @@ const syncOrderProviderStatus = async (orderId, adminId, auditContext = null) =>
     const ctx = resolveAuditContext(adminId, auditContext);
     const order = await Order.findById(orderId).populate('product');
     if (!order) throw new NotFoundError('Order');
+
+    if (order.hagoFinancial?.serviceType) {
+        throw new BusinessRuleError(
+            'Use Hago reconciliation for this financial order.',
+            'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
+        );
+    }
 
     if (!order.providerOrderId) {
         throw new BusinessRuleError(
@@ -380,6 +407,8 @@ const completeOrder = async (orderId, adminId, auditContext = null) => {
     const order = await Order.findById(orderId);
     if (!order) throw new NotFoundError('Order');
 
+    assertHagoFinancialNotUnresolved(order, 'completion');
+
     // Hard stop — already completed, nothing to do
     if (order.status === ORDER_STATUS.COMPLETED) {
         throw new BusinessRuleError('Order is already completed.', 'ALREADY_COMPLETED');
@@ -485,4 +514,27 @@ const updateOrderStatus = async (orderId, status, adminId, { rejectionReason, au
     );
 };
 
-module.exports = { listOrders, getOrderById, retryOrder, refundOrder, syncOrderProviderStatus, completeOrder, updateOrderStatus };
+const reconcileHagoFinancialOrder = async (orderId, adminId, auditContext = null) => {
+    const ctx = resolveAuditContext(adminId, auditContext);
+    const result = await new HagoFinancialExecutionService({
+        // Reconciliation may settle an authoritative failure; use the existing
+        // exactly-once refund primitive rather than a duplicate implementation.
+        refundFailedOrder: async (order) => {
+            const { refundFailedOrder } = require('../orders/orderFulfillment.service');
+            return refundFailedOrder(order);
+        },
+    }).reconcile(orderId);
+    createAuditLog({
+        actorId: ctx.actorId,
+        actorRole: ctx.actorRole,
+        action: ADMIN_ACTIONS.ORDER_RETRIED,
+        entityType: ENTITY_TYPES.ORDER,
+        entityId: orderId,
+        metadata: { action: 'hago_read_only_reconciliation', outcome: result.outcome },
+        ipAddress: ctx.ipAddress,
+        userAgent: ctx.userAgent,
+    });
+    return result;
+};
+
+module.exports = { listOrders, getOrderById, retryOrder, refundOrder, syncOrderProviderStatus, completeOrder, updateOrderStatus, reconcileHagoFinancialOrder };

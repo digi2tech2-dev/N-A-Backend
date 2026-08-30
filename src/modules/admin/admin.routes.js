@@ -298,6 +298,7 @@ router.get('/orders', requirePermission('MANAGE_ORDERS'), validateQuery(schemas.
 router.post('/orders/:id/retry', requirePermission('CONFIRM_ORDERS'), ordersCtrl.retryOrder);
 router.post('/orders/:id/refund', requirePermission('CONFIRM_ORDERS'), ordersCtrl.refundOrder);
 router.post('/orders/:id/sync-status', requirePermission('CONFIRM_ORDERS'), ordersCtrl.syncOrderProviderStatus);
+router.post('/orders/:id/hago/reconcile', requirePermission('CONFIRM_ORDERS'), ordersCtrl.reconcileHagoFinancialOrder);
 router.post('/orders/:id/complete', requirePermission('CONFIRM_ORDERS'), ordersCtrl.completeOrder);
 router.patch('/orders/:id/status', requirePermission('CONFIRM_ORDERS'), validateBody(schemas.updateOrderStatus), ordersCtrl.updateStatus);
 router.get('/orders/:id', requirePermission('MANAGE_ORDERS'), ordersCtrl.getOrderById);

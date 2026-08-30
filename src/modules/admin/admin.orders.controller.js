@@ -61,6 +61,12 @@ const completeOrder = catchAsync(async (req, res) => {
     sendSuccess(res, { order }, 'Order manually completed');
 });
 
+// POST /admin/orders/:id/hago/reconcile — read-only provider evidence refresh
+const reconcileHagoFinancialOrder = catchAsync(async (req, res) => {
+    const result = await svc.reconcileHagoFinancialOrder(req.params.id, req.user._id, resolveAuditContext(req));
+    sendSuccess(res, result, 'Hago financial reconciliation completed.');
+});
+
 // PATCH /admin/orders/:id/status — unified status update
 const updateStatus = catchAsync(async (req, res) => {
     const { status, rejectionReason } = req.body;
@@ -82,4 +88,4 @@ const updateStatus = catchAsync(async (req, res) => {
     sendSuccess(res, { order }, `Order status updated to ${order.status}.`);
 });
 
-module.exports = { listOrders, getOrderById, retryOrder, refundOrder, syncOrderProviderStatus, completeOrder, updateStatus };
+module.exports = { listOrders, getOrderById, retryOrder, refundOrder, syncOrderProviderStatus, completeOrder, reconcileHagoFinancialOrder, updateStatus };

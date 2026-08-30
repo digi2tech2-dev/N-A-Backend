@@ -30,6 +30,7 @@ const { getLivePrice, invalidate: invalidatePriceCache } = require('../providers
 const { toDecimal, toStr, toFiat, multiply, subtract, add, isPositive, compare } = require('../../shared/utils/decimalPrecision');
 const { notifyNewManualOrder, notifyOrderCompleted, notifyOrderFailed } = require('../notifications/notification.service');
 const whatsappService = require('../whatsapp/whatsapp.service');
+const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
 
 const TRANSACTION_UNSUPPORTED_PATTERN = /Transaction numbers are only allowed|replica set member|mongos|transaction.*not supported/i;
 const ORDER_NUMBER_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -454,6 +455,7 @@ const createOrder = async ({
     orderFieldsValues = null,
     customInputs = null,
     provider = null,   // ← injected; null = auto-resolve from factory
+    hagoFinancialService = null,
 }) => {
     const normalizedOrderInput = normalizeOrderInputPayload(orderFieldsValues, customInputs);
 
@@ -525,6 +527,7 @@ const createOrder = async ({
         orderFieldsValues: normalizedOrderInput,
         provider: resolvedProvider,
         providerCode,
+        hagoFinancialService,
     });
 
 };
@@ -535,7 +538,7 @@ const createOrder = async ({
  * @private
  */
 const _attemptCreateOrder = async (
-    { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode = null },
+    { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode = null, hagoFinancialService = null },
     isRetry = false,
     forceStandalone = false,
     orderNumberRetryCount = 0
@@ -621,6 +624,17 @@ const _attemptCreateOrder = async (
             customerInput = { values: orderFieldsValues, fieldsSnapshot: [] };
         }
 
+        // Hago Diamond/Crystal keeps the existing quantity-as-provider-amount
+        // semantics of these dynamic synthetic services, but obtains a trusted
+        // target and local connection reference before any wallet debit. The
+        // Nobility checkout guard above remains an earlier hard stop.
+        const activeHagoFinancialService = hagoFinancialService ?? new HagoFinancialExecutionService();
+        const hagoFinancial = await activeHagoFinancialService.prepareNewOrder({
+            product,
+            quantity: qty,
+            customerInput,
+        });
+
         // ── 2c. JIT Provider Price Verification ────────────────────────────────
         //
         // If this product is linked to a provider, verify the provider's live
@@ -681,6 +695,13 @@ const _attemptCreateOrder = async (
         ).select('billingMode').session(session || null);
 
         const isQuantityOnly = userGroupDoc?.billingMode === 'quantity_only';
+
+        if (hagoFinancial && isQuantityOnly) {
+            throw new BusinessRuleError(
+                'Hago financial fulfillment is not available for quantity-only billing groups.',
+                'HAGO_FINANCIAL_QUANTITY_ONLY_NOT_SUPPORTED'
+            );
+        }
 
         if (isQuantityOnly) {
             const quotaUser = await User.findById(userId)
@@ -758,7 +779,7 @@ const _attemptCreateOrder = async (
                     await abortTransactionQuietly(session);
                     endSessionQuietly(session);
                     return _attemptCreateOrder(
-                        { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode },
+                        { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService },
                         isRetry,
                         forceStandalone,
                         orderNumberRetryCount + 1
@@ -926,6 +947,9 @@ const _attemptCreateOrder = async (
             usdAmount: usdTotalPrice,
             chargedAmount,
         };
+        if (hagoFinancial) {
+            orderData.hagoFinancial = activeHagoFinancialService.buildOrderSnapshot(hagoFinancial, orderId);
+        }
         if (idempotencyKey) orderData.idempotencyKey = idempotencyKey;
 
         let order;
@@ -951,7 +975,7 @@ const _attemptCreateOrder = async (
                 await abortTransactionQuietly(session);
                 endSessionQuietly(session);
                 return _attemptCreateOrder(
-                    { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode },
+                    { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService },
                     isRetry,
                     forceStandalone,
                     orderNumberRetryCount + 1
@@ -1084,7 +1108,7 @@ const _attemptCreateOrder = async (
             endSessionQuietly(session);
             console.warn('[Order] MongoDB transactions are unavailable; retrying order creation without a session.');
             return _attemptCreateOrder(
-                { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode },
+                { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService },
                 true,
                 true,
                 orderNumberRetryCount
@@ -1095,7 +1119,7 @@ const _attemptCreateOrder = async (
             endSessionQuietly(session);
             await new Promise((r) => setTimeout(r, 10));
             return _attemptCreateOrder(
-                { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode },
+                { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService },
                 true,
                 forceStandalone,
                 orderNumberRetryCount
@@ -1144,6 +1168,13 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
             ? await Order.findById(orderId).session(session)
             : await Order.findById(orderId);
         if (!order) throw new NotFoundError('Order');
+
+        if (new HagoFinancialExecutionService().isRefundBlocked(order)) {
+            throw new BusinessRuleError(
+                'Hago financial orders with an unresolved provider outcome cannot be failed or refunded.',
+                'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
+            );
+        }
 
         if (order.status === ORDER_STATUS.FAILED) {
             throw new BusinessRuleError(
@@ -1324,6 +1355,13 @@ const processOrderRefund = async (orderId, remains = 0, auditContext = null) => 
             ? await Order.findById(orderId).session(session)
             : await Order.findById(orderId);
         if (!order) throw new NotFoundError('Order');
+
+        if (new HagoFinancialExecutionService().isRefundBlocked(order)) {
+            throw new BusinessRuleError(
+                'Hago financial orders with an unresolved provider outcome cannot be refunded.',
+                'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
+            );
+        }
 
         // ── Idempotency guard ────────────────────────────────────────────────
         if (order.refunded === true) {

@@ -1,11 +1,11 @@
 'use strict';
 
 /**
- * Hago V2 read-only client.
+ * Hago V2 client.
  *
- * This module intentionally exposes no auto-recharge operation. It is a
- * server-only integration: authentication always comes from HAGO_API_KEY and
- * is never read from Provider records.
+ * Authentication always comes from HAGO_API_KEY and is never read from
+ * Provider records. Financial calls are deliberately narrow and can only be
+ * reached by the server-side Hago financial executor.
  */
 
 const axios = require('axios');
@@ -62,6 +62,14 @@ const requirePositiveAmount = (value) => {
         throw new HagoClientError('amount must be a positive number.', { code: 'HAGO_INVALID_AMOUNT' });
     }
     return amount;
+};
+
+const requireIdempotencyKey = (value) => {
+    const key = String(value ?? '').trim();
+    if (!/^[A-Za-z0-9._:-]{8,128}$/.test(key)) {
+        throw new HagoClientError('A valid idempotency key is required.', { code: 'HAGO_INVALID_IDEMPOTENCY_KEY' });
+    }
+    return key;
 };
 
 const requireNobilityType = (value) => {
@@ -181,6 +189,28 @@ class HagoClient {
         }
     }
 
+    /**
+     * A financial endpoint can return a meaningful, sanitized transaction
+     * record with a non-2xx status. Preserve that record for classification,
+     * while never retaining Axios configuration/headers or retrying.
+     */
+    async _postFinancial(path, body, operation, headers) {
+        try {
+            const response = await this._client.post(path, body, {
+                headers: { ...this._authHeaders(), ...headers },
+            });
+            return { statusCode: response?.status ?? 200, data: sanitizePayload(response?.data ?? null) };
+        } catch (error) {
+            if (error?.response) {
+                return {
+                    statusCode: error.response.status ?? null,
+                    data: sanitizePayload(error.response.data ?? null),
+                };
+            }
+            throw this._normalizeError(error, operation);
+        }
+    }
+
     health() { return this._get('/health', 'health check'); }
 
     readiness() { return this._get('/ready', 'readiness check'); }
@@ -288,6 +318,24 @@ class HagoClient {
         const body = { transactionId: requireOpaqueId(transactionId, 'transactionId') };
         if (history !== undefined) body.history = sanitizePayload(history);
         return this._post(`/api/v2/connections/${encodeURIComponent(requireOpaqueId(connectionId, 'connectionId'))}/transactions/reconcile`, body, 'transaction reconciliation');
+    }
+
+    diamondRecharge(connectionId, { targetId, amount, idempotencyKey }) {
+        return this._postFinancial(
+            `/api/v2/connections/${encodeURIComponent(requireOpaqueId(connectionId, 'connectionId'))}/auto-recharge/diamond`,
+            { targetId: requireOpaqueId(targetId, 'targetId'), amount: requirePositiveAmount(amount) },
+            'Diamond recharge',
+            { 'Idempotency-Key': requireIdempotencyKey(idempotencyKey), 'X-Controlled-Mutation': 'true' }
+        );
+    }
+
+    crystalRecharge(connectionId, { targetId, amount, idempotencyKey }) {
+        return this._postFinancial(
+            `/api/v2/connections/${encodeURIComponent(requireOpaqueId(connectionId, 'connectionId'))}/auto-recharge/crystal`,
+            { targetId: requireOpaqueId(targetId, 'targetId'), amount: requirePositiveAmount(amount) },
+            'Crystal recharge',
+            { 'Idempotency-Key': requireIdempotencyKey(idempotencyKey), 'X-Controlled-Mutation': 'true' }
+        );
     }
 }
 
