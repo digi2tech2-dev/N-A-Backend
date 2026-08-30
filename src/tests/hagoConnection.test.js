@@ -109,6 +109,87 @@ describe('HagoProviderConnection model and service', () => {
         expect(serialized).not.toContain('+201234567890');
     });
 
+    it('leaves a first connection UNKNOWN when upstream login challenge creation fails', async () => {
+        const provider = await makeProvider();
+        const client = makeClient();
+        client.createLoginChallenge.mockRejectedValue(new HagoClientError('upstream 401 detail', { code: 'HAGO_REQUEST_FAILED', statusCode: 401 }));
+        const service = new HagoConnectionService({ client });
+
+        await expect(service.createLoginChallenge(provider._id, {
+            phone: '+201234567890', countryCode: '20', deviceId: 'device-12345678',
+        })).rejects.toMatchObject({ code: 'HAGO_REQUEST_FAILED' });
+
+        const stored = await internalConnection(provider._id);
+        expect(stored.connectionId).toBeUndefined();
+        expect(stored.pendingChallenge).toBeUndefined();
+        expect(stored.connectionStatus).toBe(CONNECTION_STATUS.UNKNOWN);
+    });
+
+    it.each([
+        ['missing challengeId', { status: 'OTP_SENT', challengeId: '', expiresAt: new Date(Date.now() + 120_000).toISOString() }],
+        ['invalid expiresAt', { status: 'OTP_SENT', challengeId: 'chl_invalid_expiry', expiresAt: 'not-a-date' }],
+        ['expired expiresAt', { status: 'OTP_SENT', challengeId: 'chl_expired', expiresAt: new Date(Date.now() - 1_000).toISOString() }],
+    ])('leaves a disconnected connection UNKNOWN when Hago returns an invalid login challenge: %s', async (_reason, upstreamResponse) => {
+        const provider = await makeProvider();
+        const client = makeClient();
+        client.createLoginChallenge.mockResolvedValue(upstreamResponse);
+        const service = new HagoConnectionService({ client });
+
+        await expect(service.createLoginChallenge(provider._id, {
+            phone: '+201234567890', countryCode: '20', deviceId: 'device-12345678',
+        })).rejects.toMatchObject({ code: 'HAGO_INVALID_CHALLENGE_RESPONSE' });
+
+        const stored = await internalConnection(provider._id);
+        expect(stored.connectionId).toBeUndefined();
+        expect(stored.pendingChallenge).toBeUndefined();
+        expect(stored.connectionStatus).toBe(CONNECTION_STATUS.UNKNOWN);
+    });
+
+    it('normalizes legacy disconnected OTP_PENDING state before a new challenge attempt', async () => {
+        const provider = await makeProvider();
+        const client = makeClient();
+        client.createLoginChallenge.mockRejectedValue(new HagoClientError('upstream 401 detail', { code: 'HAGO_REQUEST_FAILED', statusCode: 401 }));
+        await HagoProviderConnection.create({
+            provider: provider._id,
+            isPrimary: true,
+            enabled: true,
+            connectionStatus: CONNECTION_STATUS.OTP_PENDING,
+        });
+        const service = new HagoConnectionService({ client });
+
+        await expect(service.createLoginChallenge(provider._id, {
+            phone: '+201234567890', countryCode: '20', deviceId: 'device-12345678',
+        })).rejects.toMatchObject({ code: 'HAGO_REQUEST_FAILED' });
+
+        const stored = await internalConnection(provider._id);
+        expect(stored.connectionId).toBeUndefined();
+        expect(stored.pendingChallenge).toBeUndefined();
+        expect(stored.connectionStatus).toBe(CONNECTION_STATUS.UNKNOWN);
+    });
+
+    it('preserves an existing usable connection when a reconnect challenge request fails', async () => {
+        const provider = await makeProvider();
+        const client = makeClient();
+        client.createLoginChallenge.mockRejectedValue(new HagoClientError('upstream 401 detail', { code: 'HAGO_REQUEST_FAILED', statusCode: 401 }));
+        await HagoProviderConnection.create({
+            provider: provider._id,
+            connectionId: 'con_existing',
+            isPrimary: true,
+            enabled: true,
+            connectionStatus: CONNECTION_STATUS.CONNECTED,
+        });
+        const service = new HagoConnectionService({ client });
+
+        await expect(service.createLoginChallenge(provider._id, {
+            phone: '+201234567890', countryCode: '20', deviceId: 'device-12345678',
+        })).rejects.toMatchObject({ code: 'HAGO_REQUEST_FAILED' });
+
+        const stored = await internalConnection(provider._id);
+        expect(stored.connectionId).toBe('con_existing');
+        expect(stored.pendingChallenge).toBeUndefined();
+        expect(stored.connectionStatus).toBe(CONNECTION_STATUS.CONNECTED);
+    });
+
     it('keeps an existing connection while a reconnect is pending and updates it only after a successful OTP verification', async () => {
         const provider = await makeProvider();
         const client = makeClient();

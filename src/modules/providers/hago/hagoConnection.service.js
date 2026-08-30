@@ -164,12 +164,32 @@ class HagoConnectionService {
                 provider: providerId,
                 isPrimary: true,
                 enabled: true,
-                connectionStatus: CONNECTION_STATUS.OTP_PENDING,
+                // A local record alone does not mean Hago accepted a login
+                // challenge. OTP_PENDING is reserved for a valid persisted
+                // pendingChallenge created after an upstream success.
+                connectionStatus: CONNECTION_STATUS.UNKNOWN,
             });
         } catch (error) {
             if (error?.code !== 11000) throw error;
             return this._primaryConnection(providerId);
         }
+    }
+
+    async _normalizeDisconnectedOtpPending(connection, { ignoreSaveError = false } = {}) {
+        const isStaleOtpPending = !connection?.connectionId
+            && !connection?.pendingChallenge
+            && connection.connectionStatus === CONNECTION_STATUS.OTP_PENDING;
+        if (!isStaleOtpPending) return false;
+
+        connection.connectionStatus = CONNECTION_STATUS.UNKNOWN;
+        try {
+            await connection.save();
+        } catch (error) {
+            // This is used while preserving an upstream error. Never let a
+            // best-effort local cleanup hide the original Hago failure.
+            if (!ignoreSaveError) throw error;
+        }
+        return true;
     }
 
     _safeHagoError(error, operation) {
@@ -188,6 +208,7 @@ class HagoConnectionService {
         await this.getHagoProvider(providerId);
         const request = validateChallengeRequest(input);
         const connection = await this._findOrCreatePrimary(providerId);
+        await this._normalizeDisconnectedOtpPending(connection);
         const pending = connection.pendingChallenge;
         const now = new Date();
         if (pending?.expiresAt && new Date(pending.expiresAt) > now) {
@@ -206,12 +227,14 @@ class HagoConnectionService {
         try {
             upstream = await this.client.createLoginChallenge(request);
         } catch (error) {
+            await this._normalizeDisconnectedOtpPending(connection, { ignoreSaveError: true });
             throw this._safeHagoError(error, 'login challenge creation');
         }
 
         const expiresAt = toDate(upstream?.expiresAt);
         const challengeId = String(upstream?.challengeId ?? '').trim();
         if (!challengeId || !expiresAt || expiresAt <= now) {
+            await this._normalizeDisconnectedOtpPending(connection, { ignoreSaveError: true });
             throw new AppError('Hago returned an invalid login challenge.', 502, 'HAGO_INVALID_CHALLENGE_RESPONSE');
         }
 
