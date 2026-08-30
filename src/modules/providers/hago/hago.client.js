@@ -72,6 +72,38 @@ const requireNobilityType = (value) => {
     return nobilityType;
 };
 
+const requireLoginPhone = (value) => {
+    const phone = String(value ?? '').trim();
+    if (!/^\+?\d{8,18}$/.test(phone)) {
+        throw new HagoClientError('phone must be a valid international phone number.', { code: 'HAGO_INVALID_PHONE' });
+    }
+    return phone;
+};
+
+const requireCountryCode = (value) => {
+    const countryCode = String(value ?? '').trim();
+    if (!/^\d{1,4}$/.test(countryCode)) {
+        throw new HagoClientError('countryCode must contain 1 to 4 digits.', { code: 'HAGO_INVALID_COUNTRY_CODE' });
+    }
+    return countryCode;
+};
+
+const requireDeviceId = (value) => {
+    const deviceId = String(value ?? '').trim();
+    if (deviceId.length < 8 || deviceId.length > 256) {
+        throw new HagoClientError('deviceId must be between 8 and 256 characters.', { code: 'HAGO_INVALID_DEVICE_ID' });
+    }
+    return deviceId;
+};
+
+const requireOtp = (value) => {
+    const otp = String(value ?? '').trim();
+    if (!otp) {
+        throw new HagoClientError('otp is required.', { code: 'HAGO_OTP_REQUIRED' });
+    }
+    return otp;
+};
+
 class HagoClient {
     constructor(options = {}) {
         const configuredBaseUrl = options.baseUrl ?? process.env.HAGO_API_BASE_URL ?? DEFAULT_BASE_URL;
@@ -152,6 +184,36 @@ class HagoClient {
     health() { return this._get('/health', 'health check'); }
 
     readiness() { return this._get('/ready', 'readiness check'); }
+
+    createLoginChallenge({ phone, countryCode, deviceId, country, language }) {
+        const body = {
+            phone: requireLoginPhone(phone),
+            countryCode: requireCountryCode(countryCode),
+            deviceId: requireDeviceId(deviceId),
+        };
+        if (country !== undefined) {
+            const normalizedCountry = String(country).trim();
+            if (!/^[A-Z]{2}$/.test(normalizedCountry)) {
+                throw new HagoClientError('country must be a two-letter uppercase country code.', { code: 'HAGO_INVALID_COUNTRY' });
+            }
+            body.country = normalizedCountry;
+        }
+        if (language !== undefined) {
+            const normalizedLanguage = String(language).trim();
+            if (!normalizedLanguage) {
+                throw new HagoClientError('language cannot be empty.', { code: 'HAGO_INVALID_LANGUAGE' });
+            }
+            body.language = normalizedLanguage;
+        }
+        return this._post('/api/v2/login-challenges', body, 'login challenge creation');
+    }
+
+    verifyLoginChallenge(challengeId, { otp, deviceId }) {
+        return this._post(`/api/v2/login-challenges/${encodeURIComponent(requireOpaqueId(challengeId, 'challengeId'))}/verify`, {
+            otp: requireOtp(otp),
+            deviceId: requireDeviceId(deviceId),
+        }, 'login challenge verification');
+    }
 
     sessionValidation(connectionId) {
         return this._post(`/api/v2/connections/${encodeURIComponent(requireOpaqueId(connectionId, 'connectionId'))}/session/validate`, {}, 'session validation');

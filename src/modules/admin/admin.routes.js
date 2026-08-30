@@ -96,6 +96,7 @@ const referralPayoutReceiptUpload = createUpload('referral-payout-receipts');
 // ── Controllers ───────────────────────────────────────────────────────────────
 const usersCtrl = require('./admin.users.controller');
 const providersCtrl = require('./admin.providers.controller');
+const hagoConnectionCtrl = require('../providers/hago/hagoConnection.controller');
 const ordersCtrl = require('./admin.orders.controller');
 const walletCtrl = require('./admin.wallet.controller');
 const settingsCtrl = require('./admin.settings.controller');
@@ -273,6 +274,16 @@ router.get('/providers/:id/balance', requirePermission('MANAGE_SUPPLIERS'), prov
 router.get('/providers/:id/products', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.getProviderLiveProducts);
 router.post('/providers/:id/test-connection', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.testProviderConnection);
 router.get('/providers/:id/check-order', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.checkProviderOrder);
+// Hago is a provider-scoped, company-owned connection. These routes are
+// intentionally read-only apart from login-challenge/session reference state.
+router.post('/providers/:id/hago/login-challenge', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.createLoginChallenge);
+router.post('/providers/:id/hago/login-challenge/verify', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.verifyLoginChallenge);
+router.get('/providers/:id/hago/connection', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.getConnection);
+router.post('/providers/:id/hago/session/validate', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.validateSession);
+router.get('/providers/:id/hago/diagnostics/readiness', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.getReadiness);
+router.get('/providers/:id/hago/diagnostics/profile', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.getAgentProfile);
+router.get('/providers/:id/hago/diagnostics/wallet', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.getWalletBalance);
+router.post('/providers/:id/hago/diagnostics/verify-target', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.verifyTarget);
 router.get('/providers/:providerId/products/:externalProductId/price', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.getProductPrice);
 router.patch('/providers/:id/toggle', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.toggleProvider);
 router.get('/providers/:id', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.getProviderById);

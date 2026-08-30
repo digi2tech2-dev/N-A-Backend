@@ -101,6 +101,33 @@ describe('Hago V2 client (read-only)', () => {
         }
     });
 
+    it('uses the documented V2 login challenge endpoints and never uses the legacy key header', async () => {
+        const httpClient = makeHttpClient();
+        httpClient.post
+            .mockResolvedValueOnce({ data: { status: 'OTP_SENT', challengeId: 'chl_test', expiresAt: '2030-01-01T00:00:00.000Z' } })
+            .mockResolvedValueOnce({ data: { status: 'SUCCESS', connection: { connectionId: 'con_test' } } });
+        const client = new HagoClient({ apiKey: 'server-only-key', httpClient });
+
+        await client.createLoginChallenge({
+            phone: '+201234567890', countryCode: '20', deviceId: 'device-12345678', country: 'EG', language: 'ar',
+        });
+        await client.verifyLoginChallenge('chl_test', { otp: '123456', deviceId: 'device-12345678' });
+
+        expect(httpClient.post).toHaveBeenNthCalledWith(1,
+            '/api/v2/login-challenges',
+            { phone: '+201234567890', countryCode: '20', deviceId: 'device-12345678', country: 'EG', language: 'ar' },
+            { headers: { 'x-client-api-key': 'server-only-key' } }
+        );
+        expect(httpClient.post).toHaveBeenNthCalledWith(2,
+            '/api/v2/login-challenges/chl_test/verify',
+            { otp: '123456', deviceId: 'device-12345678' },
+            { headers: { 'x-client-api-key': 'server-only-key' } }
+        );
+        for (const [, , config] of httpClient.post.mock.calls) {
+            expect(config.headers).not.toHaveProperty('x-internal-api-key');
+        }
+    });
+
     it('implements documented V2 preview, readiness, history, transaction, and reconciliation reads', async () => {
         const httpClient = makeHttpClient();
         httpClient.post.mockResolvedValue({ data: { status: 'SUCCESS' } });
