@@ -72,6 +72,12 @@ const toDate = (value) => {
     return Number.isNaN(date.getTime()) ? null : date;
 };
 
+const isValidPendingChallenge = (pendingChallenge, now = new Date()) => {
+    const challengeId = String(pendingChallenge?.challengeId ?? '').trim();
+    const expiresAt = toDate(pendingChallenge?.expiresAt);
+    return Boolean(challengeId && expiresAt && expiresAt > now);
+};
+
 const normalizeSession = (response) => {
     const upstream = String(response?.session?.status ?? 'UNKNOWN').toUpperCase();
     if (upstream === VALIDATION_STATUS.VALID) {
@@ -99,7 +105,7 @@ const serializeConnection = (connection, { includePending = true } = {}) => {
         lastSuccessfulAt: connection.lastSuccessfulAt ?? null,
         createdAt: connection.createdAt,
         updatedAt: connection.updatedAt,
-        ...(includePending && pending ? {
+        ...(includePending && isValidPendingChallenge(pending) ? {
             pendingLogin: {
                 status: CONNECTION_STATUS.OTP_PENDING,
                 expiresAt: pending.expiresAt,
@@ -195,6 +201,21 @@ class HagoConnectionService {
         return true;
     }
 
+    async _clearInvalidPendingChallenge(connection, now = new Date()) {
+        if (!connection?.pendingChallenge || isValidPendingChallenge(connection.pendingChallenge, now)) {
+            return false;
+        }
+
+        connection.pendingChallenge = undefined;
+        // A stale OTP state must not imply that verification is still
+        // possible. Preserve any usable opaque connectionId on reconnect.
+        if (!connection.connectionId || connection.connectionStatus === CONNECTION_STATUS.OTP_PENDING) {
+            connection.connectionStatus = CONNECTION_STATUS.UNKNOWN;
+        }
+        await connection.save();
+        return true;
+    }
+
     _safeHagoError(error, operation) {
         if (error instanceof AppError) return error;
         if (error instanceof HagoClientError) {
@@ -212,18 +233,11 @@ class HagoConnectionService {
         const request = validateChallengeRequest(input);
         const connection = await this._findOrCreatePrimary(providerId);
         await this._normalizeDisconnectedOtpPending(connection);
-        const pending = connection.pendingChallenge;
         const now = new Date();
-        if (pending?.expiresAt && new Date(pending.expiresAt) > now) {
+        await this._clearInvalidPendingChallenge(connection, now);
+        const pending = connection.pendingChallenge;
+        if (isValidPendingChallenge(pending, now)) {
             throw new ConflictError('A Hago login challenge is already pending.');
-        }
-
-        // Remove an expired internal challenge before requesting another. An
-        // existing connectionId remains untouched throughout reconnection.
-        if (pending) {
-            connection.pendingChallenge = undefined;
-            if (!connection.connectionId) connection.connectionStatus = CONNECTION_STATUS.UNKNOWN;
-            await connection.save();
         }
 
         let upstream;
@@ -264,10 +278,8 @@ class HagoConnectionService {
         if (!connection || !pending) {
             throw new BusinessRuleError('No Hago login challenge is pending.', 'HAGO_LOGIN_CHALLENGE_NOT_FOUND');
         }
-        if (new Date(pending.expiresAt) <= new Date()) {
-            connection.pendingChallenge = undefined;
-            if (!connection.connectionId) connection.connectionStatus = CONNECTION_STATUS.UNKNOWN;
-            await connection.save();
+        if (!isValidPendingChallenge(pending)) {
+            await this._clearInvalidPendingChallenge(connection);
             throw new BusinessRuleError('The Hago login challenge has expired.', 'HAGO_LOGIN_CHALLENGE_EXPIRED');
         }
 
@@ -311,7 +323,9 @@ class HagoConnectionService {
 
     async getConnection(providerId) {
         await this.getHagoProvider(providerId);
-        return { connection: serializeConnection(await this._primaryConnection(providerId)) };
+        const connection = await this._primaryConnection(providerId);
+        await this._clearInvalidPendingChallenge(connection);
+        return { connection: serializeConnection(connection) };
     }
 
     async validateSession(providerId) {

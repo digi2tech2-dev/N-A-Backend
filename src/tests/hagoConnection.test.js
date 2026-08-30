@@ -139,10 +139,72 @@ describe('HagoProviderConnection model and service', () => {
             challengeId: 'chl_internal_only', deviceId: 'device-12345678', maskedIdentity: '••••7890',
         });
         expect(stored.toObject()).not.toHaveProperty('otp');
-        expect(result.connection).toMatchObject({ connectionStatus: CONNECTION_STATUS.OTP_PENDING });
+        expect(result.connection).toMatchObject({
+            connectionStatus: CONNECTION_STATUS.OTP_PENDING,
+            pendingLogin: { status: CONNECTION_STATUS.OTP_PENDING },
+        });
         expect(serialized).not.toContain('chl_internal_only');
         expect(serialized).not.toContain('device-12345678');
         expect(serialized).not.toContain('+201234567890');
+    });
+
+    it('clears expired pending state from the public connection response without removing a usable reconnect connection', async () => {
+        const provider = await makeProvider();
+        const service = new HagoConnectionService({ client: makeClient() });
+        await HagoProviderConnection.create({
+            provider: provider._id,
+            connectionId: 'con_existing',
+            isPrimary: true,
+            enabled: true,
+            connectionStatus: CONNECTION_STATUS.CONNECTED,
+            pendingChallenge: {
+                challengeId: 'chl_expired',
+                deviceId: 'device-internal',
+                expiresAt: new Date(Date.now() - 1_000),
+            },
+        });
+
+        const result = await service.getConnection(provider._id);
+        const stored = await internalConnection(provider._id);
+        const serialized = JSON.stringify(result);
+
+        expect(result.connection).toMatchObject({ hasConnection: true, connectionStatus: CONNECTION_STATUS.CONNECTED });
+        expect(result.connection).not.toHaveProperty('pendingLogin');
+        expect(stored.connectionId).toBe('con_existing');
+        expect(stored.pendingChallenge).toBeUndefined();
+        expect(serialized).not.toContain('con_existing');
+        expect(serialized).not.toContain('chl_expired');
+        expect(serialized).not.toContain('device-internal');
+    });
+
+    it('replaces an expired pending challenge with a new valid challenge', async () => {
+        const provider = await makeProvider();
+        const client = makeClient();
+        client.createLoginChallenge.mockResolvedValue({
+            status: 'OTP_SENT', challengeId: 'chl_replacement', expiresAt: new Date(Date.now() + 120_000).toISOString(),
+        });
+        await HagoProviderConnection.create({
+            provider: provider._id,
+            isPrimary: true,
+            connectionStatus: CONNECTION_STATUS.OTP_PENDING,
+            pendingChallenge: {
+                challengeId: 'chl_expired',
+                deviceId: 'device-expired',
+                expiresAt: new Date(Date.now() - 1_000),
+            },
+        });
+        const service = new HagoConnectionService({ client });
+
+        const result = await service.createLoginChallenge(provider._id, {
+            phone: '+201234567890', countryCode: '20', deviceId: 'device-12345678',
+        });
+        const stored = await internalConnection(provider._id);
+
+        expect(client.createLoginChallenge).toHaveBeenCalledTimes(1);
+        expect(stored.pendingChallenge).toMatchObject({ challengeId: 'chl_replacement', deviceId: 'device-12345678' });
+        expect(stored.connectionStatus).toBe(CONNECTION_STATUS.OTP_PENDING);
+        expect(result.connection).toMatchObject({ pendingLogin: { status: CONNECTION_STATUS.OTP_PENDING } });
+        expect(JSON.stringify(result)).not.toContain('chl_replacement');
     });
 
     it('leaves a first connection UNKNOWN when upstream login challenge creation fails', async () => {
