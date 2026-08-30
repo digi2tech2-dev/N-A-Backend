@@ -36,6 +36,7 @@ const { TorosfonAdapter } = require('./toros.adapter');
 const { AlkasrVipAdapter } = require('./alkasr.adapter');
 const { IbraAdapter } = require('./ibra.adapter');
 const { DealerApiAdapter } = require('./dealerApi.service');
+const { HagoAdapter } = require('./hago.adapter');
 
 // ─── Registry ────────────────────────────────────────────────────────────────
 //
@@ -43,6 +44,9 @@ const { DealerApiAdapter } = require('./dealerApi.service');
 // so the lookup works regardless of whether provider.slug is set.
 //
 const registry = new Map([
+    // ── Hago V2 (read-only foundation; mutations fail closed) ───────────────
+    ['hago', HagoAdapter],
+
     // ── Royal Crown ──────────────────────────────────────────────────────────
     ['royal-crown', RoyalCrownAdapter],   // slug
     ['royal crown', RoyalCrownAdapter],   // name (lowercase)

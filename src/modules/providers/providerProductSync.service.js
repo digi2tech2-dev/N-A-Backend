@@ -186,7 +186,10 @@ const _upsertOne = async (providerId, dto, now) => {
                 rawName: dto.rawName,
                 rawPrice,
                 minQty: dto.minQty ?? 1,
-                maxQty: dto.maxQty ?? 9999,
+                // A synthetic provider may intentionally have no documented
+                // maximum. Preserve an explicitly supplied null instead of
+                // inventing a generic catalog ceiling.
+                maxQty: Object.prototype.hasOwnProperty.call(dto, 'maxQty') ? dto.maxQty : 9999,
                 isActive: dto.isActive ?? true,
                 rawPayload,
                 lastSyncedAt: now,
