@@ -117,12 +117,20 @@ const serializeConnection = (connection, { includePending = true } = {}) => {
 
 const normalizeIdentity = (response, targetId = undefined) => {
     const safe = sanitizePayload(response);
-    const identity = safe?.identity ?? safe?.user ?? safe?.target ?? safe?.data ?? safe;
+    const identity = safe?.agentProfile
+        ?? safe?.userInfo
+        ?? safe?.identity
+        ?? safe?.user
+        ?? safe?.target
+        ?? safe?.data
+        ?? safe;
     return {
         ...(targetId === undefined ? {} : { targetId: String(targetId).trim() }),
         uid: identity?.uid ?? identity?.userId ?? identity?.id ?? null,
-        nickName: identity?.nickName ?? identity?.nickname ?? identity?.name ?? null,
+        vid: identity?.vid ?? null,
+        nickName: identity?.nick ?? identity?.nickName ?? identity?.nickname ?? identity?.name ?? null,
         avatar: identity?.avatar ?? null,
+        country: identity?.country ?? null,
     };
 };
 

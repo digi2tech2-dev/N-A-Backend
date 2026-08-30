@@ -377,14 +377,68 @@ describe('HagoProviderConnection model and service', () => {
         const service = new HagoConnectionService({ client });
 
         await expect(service.getReadiness(provider._id)).resolves.toEqual({ readiness: { status: 'READY' } });
-        await expect(service.getAgentProfile(provider._id)).resolves.toEqual({ profile: { uid: 'agent-uid', nickName: 'Agent', avatar: 'safe.png' } });
+        await expect(service.getAgentProfile(provider._id)).resolves.toEqual({
+            profile: { uid: 'agent-uid', vid: null, nickName: 'Agent', avatar: 'safe.png', country: null },
+        });
         await expect(service.getWalletBalance(provider._id)).resolves.toEqual({ wallet: { hagoDiamond: 4, hagoDiamondNew: 3, hagoCrystal: 2 } });
         await expect(service.verifyTarget(provider._id, { targetId: 'vid-123' })).resolves.toEqual({
-            verification: { targetId: 'vid-123', uid: 'target-uid', nickName: 'Target', avatar: 'target.png' },
+            verification: {
+                targetId: 'vid-123', uid: 'target-uid', vid: null, nickName: 'Target', avatar: 'target.png', country: null,
+            },
         });
         expect(client.agentProfile).toHaveBeenCalledWith('con_diagnostics');
         expect(client.walletBalance).toHaveBeenCalledWith('con_diagnostics');
         expect(client.verifyTarget).toHaveBeenCalledWith('con_diagnostics', 'vid-123');
+    });
+
+    it('maps V2 agentProfile and userInfo identities without conflating requested targetId and upstream vid', async () => {
+        const provider = await makeProvider();
+        const client = makeClient();
+        await HagoProviderConnection.create({ provider: provider._id, connectionId: 'con_identity', isPrimary: true, connectionStatus: CONNECTION_STATUS.CONNECTED });
+        client.agentProfile.mockResolvedValue({
+            agentProfile: {
+                uid: 'agent-uid', vid: 'agent-vid', nick: 'Agent Nick', avatar: 'agent.png', country: 'EG', token: 'never-return',
+            },
+            data: { uid: 'wrong-data-uid' },
+        });
+        client.verifyTarget.mockResolvedValue({
+            userInfo: {
+                uid: 'target-uid', vid: 'upstream-vid', nick: 'Target Nick', avatar: 'target.png', country: 'SA', sessionToken: 'never-return',
+            },
+            target: { vid: 'wrong-target-vid' },
+        });
+        const service = new HagoConnectionService({ client });
+
+        await expect(service.getAgentProfile(provider._id)).resolves.toEqual({
+            profile: { uid: 'agent-uid', vid: 'agent-vid', nickName: 'Agent Nick', avatar: 'agent.png', country: 'EG' },
+        });
+        const verification = await service.verifyTarget(provider._id, { targetId: '51511' });
+
+        expect(verification).toEqual({
+            verification: {
+                targetId: '51511', uid: 'target-uid', vid: 'upstream-vid', nickName: 'Target Nick', avatar: 'target.png', country: 'SA',
+            },
+        });
+        expect(JSON.stringify(verification)).not.toContain('con_identity');
+        expect(JSON.stringify(verification)).not.toContain('never-return');
+    });
+
+    it('keeps missing V2 identity fields null and retains legacy identity aliases', async () => {
+        const provider = await makeProvider();
+        const client = makeClient();
+        await HagoProviderConnection.create({ provider: provider._id, connectionId: 'con_identity', isPrimary: true, connectionStatus: CONNECTION_STATUS.CONNECTED });
+        client.agentProfile.mockResolvedValue({ agentProfile: { uid: 'only-uid' } });
+        client.verifyTarget.mockResolvedValue({ identity: { userId: 'legacy-uid', nickname: 'Legacy Name' } });
+        const service = new HagoConnectionService({ client });
+
+        await expect(service.getAgentProfile(provider._id)).resolves.toEqual({
+            profile: { uid: 'only-uid', vid: null, nickName: null, avatar: null, country: null },
+        });
+        await expect(service.verifyTarget(provider._id, { targetId: '51511' })).resolves.toEqual({
+            verification: {
+                targetId: '51511', uid: 'legacy-uid', vid: null, nickName: 'Legacy Name', avatar: null, country: null,
+            },
+        });
     });
 
     it('rejects unsupported request fields and contains no financial mutation path', async () => {
