@@ -249,6 +249,7 @@ describe('Hago financial execution safety', () => {
 describe('Hago input authority', () => {
     it('requires one target from product-owned fields and does not accept financial fields from the browser', () => {
         expect(getTrustedTargetId({ targetId: '51511', amount: '9999', connectionId: 'forbidden' })).toBe('51511');
+        expect(getTrustedTargetId({ target_uid: '51511', amount: '9999', connectionId: 'forbidden' })).toBe('51511');
         expect(() => getTrustedTargetId({ amount: 7, connectionId: 'forbidden' })).toThrow(BusinessRuleError);
     });
 

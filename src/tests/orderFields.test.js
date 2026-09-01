@@ -50,6 +50,7 @@ const { Product, FIELD_TYPES } = require('../modules/products/product.model');
 const { Order } = require('../modules/orders/order.model');
 const { validateOrderFields } = require('../modules/orders/orderFields.validator');
 const { createOrder } = require('../modules/orders/order.service');
+const { productFieldVerificationService } = require('../modules/products/productFieldVerification.service');
 const meController = require('../modules/me/me.controller');
 const productService = require('../modules/products/product.service');
 
@@ -358,6 +359,30 @@ describe('[3] Order creation — orderFields integration', () => {
         expect(order.customerInput).not.toBeNull();
         expect(order.customerInput.values.player_id).toBe('9876');
         expect(order.customerInput.values.server).toBe('NA');
+    });
+
+    it('cannot bypass mandatory provider verification during order creation', async () => {
+        const fields = [{
+            ...FIELDS[0],
+            verification: { enabled: true, strategy: 'provider', providerCapability: 'target_identity' },
+        }];
+        const product = await createProduct({ basePrice: 10, minQty: 1, maxQty: 10, orderFields: fields });
+        const failure = new Error('verification required');
+        failure.code = 'HAGO_INVALID_TARGET';
+        const spy = jest.spyOn(productFieldVerificationService, 'enforceRequiredFields').mockRejectedValue(failure);
+
+        await expect(createOrder({
+            userId: customer._id,
+            productId: product._id,
+            quantity: 1,
+            orderFieldsValues: { player_id: 'changed-after-verification' },
+        })).rejects.toMatchObject({ code: 'HAGO_INVALID_TARGET' });
+
+        expect(spy).toHaveBeenCalledWith(expect.objectContaining({
+            product: expect.anything(),
+            values: { player_id: 'changed-after-verification' },
+        }));
+        spy.mockRestore();
     });
 
     it('/me/orders accepts orderFieldsValues with player_id', async () => {

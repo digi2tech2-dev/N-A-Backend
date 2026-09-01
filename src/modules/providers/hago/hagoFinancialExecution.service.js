@@ -33,7 +33,7 @@ const HAGO_FINANCIAL_UNKNOWN_REASONS = Object.freeze({
     RECONCILIATION_UNRESOLVED: 'RECONCILIATION_UNRESOLVED',
 });
 
-const HAGO_TARGET_KEYS = new Set(['targetid', 'target_id', 'vid', 'hagoid', 'hago_id', 'playerid', 'player_id', 'target']);
+const HAGO_TARGET_KEYS = new Set(['targetid', 'target_id', 'targetuid', 'target_uid', 'vid', 'hagoid', 'hago_id', 'playerid', 'player_id', 'target']);
 const HAGO_FINANCIAL_RECONCILIATION_MAX_ATTEMPTS = 3;
 const HAGO_FINANCIAL_RECONCILIATION_INTERVAL_MS = 5 * 60 * 1000;
 

@@ -397,6 +397,9 @@ class HagoConnectionService {
         try {
             return { verification: normalizeIdentity(await this.client.verifyTarget(connection.connectionId, targetId), targetId) };
         } catch (error) {
+            if (error instanceof HagoClientError && [400, 404].includes(error.statusCode)) {
+                throw new BusinessRuleError('The Hago ID is invalid or unavailable.', 'HAGO_INVALID_TARGET');
+            }
             throw this._safeHagoError(error, 'target verification');
         }
     }

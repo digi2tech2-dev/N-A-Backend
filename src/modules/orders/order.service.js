@@ -10,6 +10,7 @@ const { debitWalletAtomic, refundWalletAtomic } = require('../wallet/wallet.serv
 const { calculateUserPrice } = require('./pricing.service');
 const { getProviderAdapter } = require('../providers/adapters/adapter.factory');
 const { validateOrderFields } = require('./orderFields.validator');
+const { productFieldVerificationService } = require('../products/productFieldVerification.service');
 const {
     NotFoundError,
     BusinessRuleError,
@@ -623,6 +624,14 @@ const _attemptCreateOrder = async (
             // can forward them to the provider (e.g. { link: '...' }).
             customerInput = { values: orderFieldsValues, fieldsSnapshot: [] };
         }
+
+        // A browser-side success state is only UX. Re-check every configured
+        // provider-verifiable field against the exact, validated value before
+        // any pricing or wallet mutation can occur.
+        await productFieldVerificationService.enforceRequiredFields({
+            product,
+            values: customerInput?.values ?? {},
+        });
 
         // Hago Diamond/Crystal keeps the existing quantity-as-provider-amount
         // semantics of these dynamic synthetic services, but obtains a trusted

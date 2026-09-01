@@ -48,6 +48,12 @@ const FIELD_TYPES = Object.freeze({
 });
 
 const DYNAMIC_FIELD_TYPES = Object.freeze(['text', 'number', 'email', 'select', 'image', 'file']);
+const FIELD_VERIFICATION_STRATEGIES = Object.freeze({
+    PROVIDER: 'provider',
+});
+const FIELD_VERIFICATION_CAPABILITIES = Object.freeze({
+    TARGET_IDENTITY: 'target_identity',
+});
 
 // ─── Schema ───────────────────────────────────────────────────────────────────
 
@@ -425,6 +431,26 @@ const productSchema = new mongoose.Schema(
                         type: Boolean,
                         default: false,
                     },
+
+                    /**
+                     * Optional server-owned verification requirement for a
+                     * customer input. `isVerifiable` remains as a legacy
+                     * compatibility flag; new product definitions use this
+                     * explicit, capability-based configuration.
+                     */
+                    verification: {
+                        enabled: { type: Boolean, default: false },
+                        strategy: {
+                            type: String,
+                            enum: Object.values(FIELD_VERIFICATION_STRATEGIES),
+                            default: null,
+                        },
+                        providerCapability: {
+                            type: String,
+                            enum: Object.values(FIELD_VERIFICATION_CAPABILITIES),
+                            default: null,
+                        },
+                    },
                 },
             ],
             default: [],
@@ -460,6 +486,19 @@ const productSchema = new mongoose.Schema(
                     isVerifiable: {
                         type: Boolean,
                         default: false,
+                    },
+                    verification: {
+                        enabled: { type: Boolean, default: false },
+                        strategy: {
+                            type: String,
+                            enum: Object.values(FIELD_VERIFICATION_STRATEGIES),
+                            default: null,
+                        },
+                        providerCapability: {
+                            type: String,
+                            enum: Object.values(FIELD_VERIFICATION_CAPABILITIES),
+                            default: null,
+                        },
                     },
                 },
             ],
@@ -553,5 +592,7 @@ module.exports = {
     EXECUTION_TYPES,
     FIELD_TYPES,
     DYNAMIC_FIELD_TYPES,
+    FIELD_VERIFICATION_STRATEGIES,
+    FIELD_VERIFICATION_CAPABILITIES,
     computeFinalPrice,
 };

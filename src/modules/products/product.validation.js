@@ -7,6 +7,8 @@ const {
     MARKUP_TYPES,
     EXECUTION_TYPES,
     DYNAMIC_FIELD_TYPES,
+    FIELD_VERIFICATION_STRATEGIES,
+    FIELD_VERIFICATION_CAPABILITIES,
 } = require('./product.model');
 const { isPositive } = require('../../shared/utils/decimalPrecision');
 
@@ -39,8 +41,31 @@ const validateDynamicFields = (fields = []) => {
             throw new Error('dynamicFields names must be unique');
         }
         names.add(normalizedName);
+
+        const verification = field.verification;
+        if (verification?.enabled === true && !['text', 'number'].includes(String(field.type || 'text').toLowerCase())) {
+            throw new Error('Provider verification is supported only for text or number dynamic fields');
+        }
     }
 
+    return true;
+};
+
+const validateFieldVerification = (value) => {
+    if (value == null) return true;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('dynamicFields[].verification must be an object');
+    }
+    if (typeof value.enabled !== 'boolean') {
+        throw new Error('dynamicFields[].verification.enabled must be a boolean');
+    }
+    if (!value.enabled) return true;
+    if (value.strategy !== FIELD_VERIFICATION_STRATEGIES.PROVIDER) {
+        throw new Error('dynamicFields[].verification.strategy must be provider when verification is enabled');
+    }
+    if (value.providerCapability !== FIELD_VERIFICATION_CAPABILITIES.TARGET_IDENTITY) {
+        throw new Error('dynamicFields[].verification.providerCapability must be target_identity when verification is enabled');
+    }
     return true;
 };
 
@@ -205,6 +230,10 @@ const createProductValidation = [
     body('dynamicFields.*.isVerifiable')
         .optional()
         .isBoolean().withMessage('dynamicFields[].isVerifiable must be a boolean'),
+
+    body('dynamicFields.*.verification')
+        .optional()
+        .custom(validateFieldVerification),
 ];
 
 // ─── Admin: publish from provider product ────────────────────────────────────
@@ -315,6 +344,10 @@ const publishProductValidation = [
     body('dynamicFields.*.isVerifiable')
         .optional()
         .isBoolean().withMessage('dynamicFields[].isVerifiable must be a boolean'),
+
+    body('dynamicFields.*.verification')
+        .optional()
+        .custom(validateFieldVerification),
 ];
 
 // ─── Admin: update product ────────────────────────────────────────────────────
@@ -443,10 +476,18 @@ const updateProductValidation = [
     body('dynamicFields.*.isVerifiable')
         .optional()
         .isBoolean().withMessage('dynamicFields[].isVerifiable must be a boolean'),
+
+    body('dynamicFields.*.verification')
+        .optional()
+        .custom(validateFieldVerification),
 ];
 
 const verifyFieldValidation = [
     param('id').isMongoId().withMessage('Invalid product ID'),
+    body('fieldKey')
+        .trim()
+        .notEmpty().withMessage('fieldKey is required')
+        .matches(/^[a-zA-Z][a-zA-Z0-9_-]*$/).withMessage('fieldKey is invalid'),
     body('fieldValue')
         .trim()
         .notEmpty().withMessage('fieldValue is required')
