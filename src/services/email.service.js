@@ -16,7 +16,6 @@
  *   SMTP_USER   - Auth username
  *   SMTP_PASS   - Auth password / app password
  *   EMAIL_FROM  - Sender address (default: noreply@platform.com)
- *   APP_URL     - Base URL for verification links (default: http://localhost:3000)
  *
  * In NODE_ENV=test all sends are silently skipped (no real email sent).
  */
@@ -59,7 +58,7 @@ const sendEmail = async ({ to, subject, html, text }) => {
     const transporter = _getTransporter();
 
     await transporter.sendMail({
-        from: `"Digital Platform" <${config.email.from}>`,
+        from: `"N&A HUB" <${config.email.from}>`,
         to,
         subject,
         html,
@@ -72,10 +71,10 @@ const sendEmail = async ({ to, subject, html, text }) => {
 /**
  * Build the verification email HTML.
  *
- * @param {{ name: string, verifyUrl: string }} params
+ * @param {{ name: string, verificationCode: string, expiresInMinutes: number }} params
  * @returns {string}
  */
-const _verificationTemplate = ({ name, verifyUrl, verificationCode }) => `
+const buildVerificationEmailTemplate = ({ name, verificationCode, expiresInMinutes }) => `
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -96,7 +95,7 @@ const _verificationTemplate = ({ name, verifyUrl, verificationCode }) => `
             <td style="background:linear-gradient(135deg,#4f46e5,#7c3aed);
                        padding:40px 48px;text-align:center;">
               <h1 style="margin:0;color:#fff;font-size:26px;font-weight:700;
-                          letter-spacing:-0.5px;">Digital Platform</h1>
+                          letter-spacing:-0.5px;">N&amp;A HUB</h1>
               <p style="margin:8px 0 0;color:rgba(255,255,255,.75);font-size:14px;">
                 Account Verification
               </p>
@@ -110,31 +109,28 @@ const _verificationTemplate = ({ name, verifyUrl, verificationCode }) => `
                 Hi <strong>${name}</strong>,
               </p>
               <p style="margin:0 0 32px;font-size:15px;color:#6b7280;line-height:1.6;">
-                Thank you for registering. Please confirm your email address by
-                clicking the button below. This link expires in
-                <strong>24 hours</strong>.
+                Use the verification code below to confirm your email address and activate your account.
+                This code expires in <strong>${expiresInMinutes} minutes</strong>.
               </p>
 
-              <!-- CTA Button -->
               <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
                 <tr>
                   <td align="center">
-                    <a href="${verifyUrl}"
-                       style="display:inline-block;background:linear-gradient(135deg,#4f46e5,#7c3aed);
-                              color:#fff;font-size:15px;font-weight:600;
-                              text-decoration:none;padding:14px 40px;
-                              border-radius:8px;letter-spacing:0.3px;">
-                      ✉ Verify Email Address
-                    </a>
+                    <div style="display:inline-block;background:#f9fafb;border:1px solid #e5e7eb;
+                                color:#111827;font-size:32px;font-weight:700;letter-spacing:8px;
+                                padding:18px 28px;border-radius:8px;">
+                      ${verificationCode}
+                    </div>
                   </td>
                 </tr>
               </table>
 
+              <p style="margin:28px 0 0;font-size:14px;color:#6b7280;line-height:1.6;text-align:center;">
+                Enter this code on the N&amp;A HUB email verification page.
+              </p>
+
               <p style="margin:32px 0 0;font-size:13px;color:#9ca3af;line-height:1.6;">
                 If you didn't create an account, you can safely ignore this email.
-              </p>
-              <p style="margin:12px 0 0;font-size:12px;color:#d1d5db;word-break:break-all;">
-                Or copy this link: ${verifyUrl}
               </p>
             </td>
           </tr>
@@ -144,7 +140,7 @@ const _verificationTemplate = ({ name, verifyUrl, verificationCode }) => `
             <td style="background:#f9fafb;padding:24px 48px;border-top:1px solid #e5e7eb;
                        text-align:center;">
               <p style="margin:0;font-size:12px;color:#9ca3af;">
-                &copy; ${new Date().getFullYear()} Digital Platform. All rights reserved.
+                &copy; ${new Date().getFullYear()} N&amp;A HUB. All rights reserved.
               </p>
             </td>
           </tr>
@@ -184,7 +180,7 @@ const _twoFactorOtpTemplate = ({ name, otp }) => `
             <td style="background:linear-gradient(135deg,#4f46e5,#7c3aed);
                        padding:40px 48px;text-align:center;">
               <h1 style="margin:0;color:#fff;font-size:26px;font-weight:700;
-                          letter-spacing:-0.5px;">Digital Platform</h1>
+                          letter-spacing:-0.5px;">N&amp;A HUB</h1>
               <p style="margin:8px 0 0;color:rgba(255,255,255,.75);font-size:14px;">
                 Two-Factor Authentication
               </p>
@@ -214,14 +210,6 @@ const _twoFactorOtpTemplate = ({ name, otp }) => `
                 </tr>
               </table>
 
-              ${verificationCode ? `
-              <p style="margin:28px 0 10px;font-size:14px;color:#6b7280;line-height:1.6;text-align:center;">
-                Or enter this four-digit verification code in the app. It expires in <strong>10 minutes</strong>.
-              </p>
-              <div style="text-align:center;color:#111827;font-size:30px;font-weight:700;letter-spacing:8px;">
-                ${verificationCode}
-              </div>` : ''}
-
               <p style="margin:32px 0 0;font-size:13px;color:#9ca3af;line-height:1.6;">
                 If you did not try to sign in, please change your password or contact support.
               </p>
@@ -233,7 +221,7 @@ const _twoFactorOtpTemplate = ({ name, otp }) => `
             <td style="background:#f9fafb;padding:24px 48px;border-top:1px solid #e5e7eb;
                        text-align:center;">
               <p style="margin:0;font-size:12px;color:#9ca3af;">
-                &copy; ${new Date().getFullYear()} Digital Platform. All rights reserved.
+                &copy; ${new Date().getFullYear()} N&amp;A HUB. All rights reserved.
               </p>
             </td>
           </tr>
@@ -249,21 +237,18 @@ const _twoFactorOtpTemplate = ({ name, otp }) => `
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Send an account verification email containing a signed token link.
+ * Send an account verification email containing a one-time code.
  *
  * @param {{ name: string, email: string }} user
- * @param {string} rawToken  - the un-hashed token (generated by auth.service)
+ * @param {string} verificationCode - one-time code, never persisted raw
+ * @param {number} expiresInMinutes
  * @returns {Promise<void>}
  */
-const sendVerificationEmail = async (user, rawToken, verificationCode) => {
-    const baseUrl = process.env.APP_URL || 'http://localhost:5000';
-    const verifyUrl =
-        `${baseUrl}/api/auth/verify-email?token=${encodeURIComponent(rawToken)}`;
-
+const sendVerificationEmail = async (user, verificationCode, expiresInMinutes) => {
     await sendEmail({
         to: user.email,
-        subject: 'Verify your email address – Digital Platform',
-        html: _verificationTemplate({ name: user.name, verifyUrl, verificationCode }),
+        subject: 'Your N&A HUB email verification code',
+        html: buildVerificationEmailTemplate({ name: user.name, verificationCode, expiresInMinutes }),
     });
 };
 
@@ -277,9 +262,14 @@ const sendVerificationEmail = async (user, rawToken, verificationCode) => {
 const sendTwoFactorOtpEmail = async (user, otp) => {
     await sendEmail({
         to: user.email,
-        subject: 'Your 2FA code - Digital Platform',
+        subject: 'Your N&A HUB 2FA code',
         html: _twoFactorOtpTemplate({ name: user.name, otp }),
     });
 };
 
-module.exports = { sendEmail, sendVerificationEmail, sendTwoFactorOtpEmail };
+module.exports = {
+    sendEmail,
+    sendVerificationEmail,
+    sendTwoFactorOtpEmail,
+    buildVerificationEmailTemplate,
+};

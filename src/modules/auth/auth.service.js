@@ -51,7 +51,8 @@ const {
 
 const TWO_FACTOR_OTP_EXPIRY_MS = 5 * 60 * 1000;
 const PROFILE_COMPLETION_EXPIRY_MS = 15 * 60 * 1000;
-const EMAIL_VERIFICATION_CODE_EXPIRY_MS = 10 * 60 * 1000;
+const EMAIL_VERIFICATION_CODE_EXPIRY_MINUTES = 10;
+const EMAIL_VERIFICATION_CODE_EXPIRY_MS = EMAIL_VERIFICATION_CODE_EXPIRY_MINUTES * 60 * 1000;
 const MAX_EMAIL_VERIFICATION_CODE_ATTEMPTS = 5;
 
 /** Sign full-session JWT for a user. */
@@ -97,14 +98,23 @@ const _generateTwoFactorOtp = () =>
 const _generateEmailVerificationCode = () =>
     crypto.randomInt(1000, 10000).toString();
 
-const _generateEmailVerificationCredentials = () => {
+const _generateEmailVerificationCredentials = (previousCodeHash = null) => {
     const { rawToken, hashedToken } = _generateVerificationToken();
-    const code = _generateEmailVerificationCode();
+    let code = _generateEmailVerificationCode();
+    let codeHash = _hashOtp(code);
+
+    // A resend must not leave a previously issued code valid, even if random
+    // generation happens to select the same four digits again.
+    while (previousCodeHash && _safeCompareHash(codeHash, previousCodeHash)) {
+        code = _generateEmailVerificationCode();
+        codeHash = _hashOtp(code);
+    }
+
     return {
         rawToken,
         hashedToken,
         code,
-        codeHash: _hashOtp(code),
+        codeHash,
         tokenExpiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
         codeExpiresAt: new Date(Date.now() + EMAIL_VERIFICATION_CODE_EXPIRY_MS),
     };
@@ -176,7 +186,7 @@ const _safeCompareHash = (candidateHash, storedHash) => {
  *  1. Email must be unique.
  *  2. Assigned to the group with the highest markup percentage.
  *  3. Status starts as ACTIVE — no admin approval required.
- *  4. verified = false — user must click email link before login is allowed.
+ *  4. verified = false — user must enter the emailed code before login is allowed.
  *  5. A verification email is dispatched (fire-and-forget safe).
  */
 const register = async ({
@@ -255,7 +265,7 @@ const register = async ({
     });
 
     // ── 6. Send verification email (fire-and-forget — never block registration) ──
-    emailService.sendVerificationEmail(user, verification.rawToken, verification.code).catch((err) => {
+    emailService.sendVerificationEmail(user, verification.code, EMAIL_VERIFICATION_CODE_EXPIRY_MINUTES).catch((err) => {
         console.error('[Auth] Failed to send verification email:', err.message);
     });
 
@@ -290,7 +300,7 @@ const login = async ({ email, password }) => {
     if (!user.verified) {
         throw new AuthenticationError(
             'Please verify your email address before logging in. ' +
-            'Check your inbox for the verification link.'
+            'Check your inbox for the verification code.'
         );
     }
 
@@ -416,7 +426,7 @@ const verifyEmail = async (rawToken) => {
 };
 
 /**
- * Consume the four-digit email verification code while preserving link verification.
+ * Consume the four-digit email verification code while preserving legacy link verification.
  */
 const verifyEmailCode = async ({ email, code } = {}) => {
     const normalizedEmail = String(email || '').trim().toLowerCase();
@@ -493,11 +503,11 @@ const verifyEmailCode = async ({ email, code } = {}) => {
  */
 const resendVerification = async (email) => {
     const user = await User.findOne({ email: email.toLowerCase() })
-        .select('+emailVerificationToken +emailVerificationExpires +verified');
+        .select('+emailVerificationToken +emailVerificationExpires +emailVerificationCodeHash +verified');
 
     if (!user) {
         // Avoid user enumeration — return same message as success
-        return { message: 'If that email exists, a verification link has been sent.' };
+        return { message: 'If that email exists, a verification code has been sent.' };
     }
 
     if (user.verified) {
@@ -507,7 +517,7 @@ const resendVerification = async (email) => {
         );
     }
 
-    const verification = _generateEmailVerificationCredentials();
+    const verification = _generateEmailVerificationCredentials(user.emailVerificationCodeHash);
 
     user.emailVerificationToken = verification.hashedToken;
     user.emailVerificationExpires = verification.tokenExpiresAt;
@@ -516,11 +526,11 @@ const resendVerification = async (email) => {
     user.emailVerificationCodeAttempts = 0;
     await user.save();
 
-    emailService.sendVerificationEmail(user, verification.rawToken, verification.code).catch((err) => {
+    emailService.sendVerificationEmail(user, verification.code, EMAIL_VERIFICATION_CODE_EXPIRY_MINUTES).catch((err) => {
         console.error('[Auth] Failed to resend verification email:', err.message);
     });
 
-    return { message: 'If that email exists, a verification link has been sent.' };
+    return { message: 'If that email exists, a verification code has been sent.' };
 };
 
 // ─── loginWithGoogle ──────────────────────────────────────────────────────────

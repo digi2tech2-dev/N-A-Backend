@@ -25,6 +25,7 @@ const {
     verify2FA,
 } = require('../modules/auth/auth.service');
 const config = require('../config/config');
+const { buildVerificationEmailTemplate } = require('../services/email.service');
 const emailService = require('../services/email.service');
 const {
     connectTestDB,
@@ -122,6 +123,45 @@ describe('[1] Registration', () => {
 
         // Should be a 64-char hex string (SHA-256)
         expect(dbUser.emailVerificationToken).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('sends a usable four-digit code while storing only its hash', async () => {
+        const sendSpy = jest.spyOn(emailService, 'sendVerificationEmail').mockResolvedValue();
+        const result = await register({
+            name: 'Code User',
+            email: `code-${Date.now()}@example.com`,
+            password: 'SecurePass@1',
+        });
+
+        expect(sendSpy).toHaveBeenCalledTimes(1);
+        const [, rawCode, expiresInMinutes] = sendSpy.mock.calls[0];
+        expect(rawCode).toMatch(/^\d{4}$/);
+        expect(expiresInMinutes).toBe(10);
+
+        const dbUser = await User.findById(result.user._id)
+            .select('+emailVerificationCodeHash +emailVerificationCodeExpires');
+        expect(dbUser.emailVerificationCodeHash).toMatch(/^[a-f0-9]{64}$/);
+        expect(dbUser.emailVerificationCodeHash).not.toBe(rawCode);
+
+        await verifyEmailCode({ email: result.user.email, code: rawCode });
+        expect((await User.findById(result.user._id)).verified).toBe(true);
+        sendSpy.mockRestore();
+    });
+
+    it('renders a code-only registration email without a verification URL or token', () => {
+        const html = buildVerificationEmailTemplate({
+            name: 'Email User',
+            verificationCode: '4827',
+            expiresInMinutes: 10,
+        });
+
+        expect(html).toContain('N&amp;A HUB');
+        expect(html).toContain('4827');
+        expect(html).toContain('10 minutes');
+        expect(html).not.toContain('Verify Email Address');
+        expect(html).not.toContain('/api/auth/verify-email');
+        expect(html).not.toContain('token=');
+        expect(html).not.toContain('href=');
     });
 
     it('sets expiry ~24 hours in the future', async () => {
@@ -242,7 +282,7 @@ describe('[3] Resend Verification', () => {
 
     it('returns an anti-enumeration message for unknown email', async () => {
         const result = await resendVerification('nobody@nowhere.com');
-        expect(result.message).toMatch(/verification link has been sent/i);
+        expect(result.message).toMatch(/verification code has been sent/i);
     });
 
     it('throws ALREADY_VERIFIED for already-verified user', async () => {
@@ -418,6 +458,25 @@ describe('[3b] Email verification code', () => {
         expect(rotated.emailVerificationCodeAttempts).toBe(0);
         await expect(verifyEmailCode({ email: user.email, code: '1234' }))
             .rejects.toMatchObject({ code: 'INVALID_OR_EXPIRED_VERIFICATION_CODE' });
+    });
+
+    it('sends only a new code on resend, and the new code is usable', async () => {
+        const { user } = await registerUser();
+        await seedVerificationCode(user._id, '1234');
+        const sendSpy = jest.spyOn(emailService, 'sendVerificationEmail').mockResolvedValue();
+
+        await resendVerification(user.email);
+
+        expect(sendSpy).toHaveBeenCalledTimes(1);
+        const [, newCode, expiresInMinutes] = sendSpy.mock.calls[0];
+        expect(newCode).toMatch(/^\d{4}$/);
+        expect(newCode).not.toBe('1234');
+        expect(expiresInMinutes).toBe(10);
+
+        await expect(verifyEmailCode({ email: user.email, code: '1234' }))
+            .rejects.toMatchObject({ code: 'INVALID_OR_EXPIRED_VERIFICATION_CODE' });
+        await verifyEmailCode({ email: user.email, code: newCode });
+        sendSpy.mockRestore();
     });
 
     it('retains the existing verification-link flow', async () => {
