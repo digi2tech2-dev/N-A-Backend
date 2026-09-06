@@ -105,6 +105,42 @@ const registry = new Map([
     ['3amo card', AlkasrVipAdapter], // name
     ['3amocard', AlkasrVipAdapter],  // compact
 
+    // ── dolr card (Uses Alkasr Adapter) ─────────────────────────────────────
+    ['dolr-card', AlkasrVipAdapter], // slug
+    ['dolr card', AlkasrVipAdapter], // name
+    ['dolrcard', AlkasrVipAdapter],  // compact
+
+    // ── x3 store (Uses Alkasr Adapter) ─────────────────────────────────────
+    ['x3-store', AlkasrVipAdapter], // slug
+    ['x3 store', AlkasrVipAdapter], // name
+    ['x3store', AlkasrVipAdapter],  // compact
+
+
+    // ── helmy card (Uses Alkasr Adapter) ─────────────────────────────────────
+    ['helmy-card', AlkasrVipAdapter], // slug
+    ['helmy card', AlkasrVipAdapter], // name
+    ['helmycard', AlkasrVipAdapter],  // compact
+
+    // ── sultan card (Uses Alkasr Adapter) ─────────────────────────────────────
+    ['sultan-card', AlkasrVipAdapter], // slug
+    ['sultan card', AlkasrVipAdapter], // name
+    ['sultancard', AlkasrVipAdapter],  // compact
+
+    // ── khaled cash (Uses Alkasr Adapter) ─────────────────────────────────────
+    ['khaled-cash', AlkasrVipAdapter], // slug
+    ['khaled cash', AlkasrVipAdapter], // name
+    ['khaledcash', AlkasrVipAdapter],  // compact
+
+    // ── alfaore store (Uses Alkasr Adapter) ─────────────────────────────────────
+    ['alfaore-store', AlkasrVipAdapter], // slug
+    ['alfaore store', AlkasrVipAdapter], // name
+    ['alfaorerestore', AlkasrVipAdapter],  // compact
+
+    // ── top1 store (Uses Alkasr Adapter) ─────────────────────────────────────
+    ['top1-store', AlkasrVipAdapter], // slug
+    ['top1 store', AlkasrVipAdapter], // name
+    ['top1store', AlkasrVipAdapter],  // compact
+
 
     // -- Ibra Store ------------------------------------------------------------
     ['ibra-store', IbraAdapter],
