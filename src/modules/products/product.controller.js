@@ -4,6 +4,7 @@ const productService = require('./product.service');
 const { Product } = require('./product.model');
 const { productFieldVerificationService } = require('./productFieldVerification.service');
 const { hagoNobilityCommerceService } = require('../providers/hago/hagoNobilityCommerce.service');
+const { InchillFinancialExecutionService } = require('../providers/inchill/inchillFinancialExecution.service');
 const { sendSuccess, sendCreated, sendPaginated } = require('../../shared/utils/apiResponse');
 const catchAsync = require('../../shared/utils/catchAsync');
 
@@ -41,6 +42,12 @@ const SENSITIVE_FIELDS = [
 const sanitizeProductForCustomer = (product) => {
     if (!product) return product;
     const obj = typeof product.toObject === 'function' ? product.toObject() : { ...product };
+    const providerSlug = String(obj.provider?.slug ?? '').toLowerCase();
+    const externalProductId = String(obj.providerProduct?.externalProductId ?? '');
+    obj.isInchillDiamond = providerSlug === 'inchill' && (
+        externalProductId === 'INCHILL_DIAMOND_AMOUNT'
+        || obj.providerProduct?.rawPayload?.metadata?.serviceType === 'DIAMOND'
+    );
     for (const field of SENSITIVE_FIELDS) {
         delete obj[field];
     }
@@ -132,6 +139,22 @@ const hagoNobilityReadiness = catchAsync(async (req, res) => {
     sendSuccess(res, result.quote, 'Hago Nobility readiness retrieved successfully.');
 });
 
+// Customer-safe Inchill readiness. The provider connection and agent phone are
+// derived server-side; no operational wallet or upstream request details leave
+// this boundary.
+const inchillPreflight = catchAsync(async (req, res) => {
+    const product = await Product.findById(req.params.id);
+    if (!product || product.deletedAt || product.isActive === false) {
+        return res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found' });
+    }
+    const result = await new InchillFinancialExecutionService().customerPreflight({
+        product,
+        targetId: req.body?.targetId,
+        amount: req.body?.amount,
+    });
+    sendSuccess(res, result, 'Inchill recharge readiness retrieved.');
+});
+
 // ─── Admin only ───────────────────────────────────────────────────────────────
 
 /**
@@ -180,4 +203,5 @@ module.exports = {
     toggleStatus,
     verifyField,
     hagoNobilityReadiness,
+    inchillPreflight,
 };

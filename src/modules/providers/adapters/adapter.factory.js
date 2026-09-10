@@ -37,6 +37,7 @@ const { AlkasrVipAdapter } = require('./alkasr.adapter');
 const { IbraAdapter } = require('./ibra.adapter');
 const { DealerApiAdapter } = require('./dealerApi.service');
 const { HagoAdapter } = require('./hago.adapter');
+const { InchillAdapter } = require('./inchill.adapter');
 
 // ─── Registry ────────────────────────────────────────────────────────────────
 //
@@ -46,6 +47,8 @@ const { HagoAdapter } = require('./hago.adapter');
 const registry = new Map([
     // ── Hago V2 (read-only foundation; mutations fail closed) ───────────────
     ['hago', HagoAdapter],
+    ['inchill', InchillAdapter],
+    ['inchill app', InchillAdapter],
 
     // ── Royal Crown ──────────────────────────────────────────────────────────
     ['royal-crown', RoyalCrownAdapter],   // slug

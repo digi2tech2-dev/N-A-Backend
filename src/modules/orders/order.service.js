@@ -32,6 +32,7 @@ const { toDecimal, toStr, toFiat, multiply, subtract, add, isPositive, compare }
 const { notifyNewManualOrder, notifyOrderCompleted, notifyOrderFailed } = require('../notifications/notification.service');
 const whatsappService = require('../whatsapp/whatsapp.service');
 const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
+const { InchillFinancialExecutionService } = require('../providers/inchill/inchillFinancialExecution.service');
 
 const TRANSACTION_UNSUPPORTED_PATTERN = /Transaction numbers are only allowed|replica set member|mongos|transaction.*not supported/i;
 const ORDER_NUMBER_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -643,6 +644,14 @@ const _attemptCreateOrder = async (
             quantity: qty,
             customerInput,
         });
+        // Inchill has its own controlled financial boundary and always fixes
+        // the service to DIAMOND. It repeats the full read-only preflight
+        // before local wallet debit and again before the one mutation.
+        const inchillFinancial = await new InchillFinancialExecutionService().prepareNewOrder({
+            product,
+            quantity: qty,
+            customerInput,
+        });
 
         // ── 2c. JIT Provider Price Verification ────────────────────────────────
         //
@@ -705,10 +714,10 @@ const _attemptCreateOrder = async (
 
         const isQuantityOnly = userGroupDoc?.billingMode === 'quantity_only';
 
-        if (hagoFinancial && isQuantityOnly) {
+        if ((hagoFinancial || inchillFinancial) && isQuantityOnly) {
             throw new BusinessRuleError(
-                'Hago financial fulfillment is not available for quantity-only billing groups.',
-                'HAGO_FINANCIAL_QUANTITY_ONLY_NOT_SUPPORTED'
+                `${hagoFinancial ? 'Hago' : 'Inchill'} financial fulfillment is not available for quantity-only billing groups.`,
+                hagoFinancial ? 'HAGO_FINANCIAL_QUANTITY_ONLY_NOT_SUPPORTED' : 'INCHILL_FINANCIAL_QUANTITY_ONLY_NOT_SUPPORTED'
             );
         }
 
@@ -959,6 +968,9 @@ const _attemptCreateOrder = async (
         if (hagoFinancial) {
             orderData.hagoFinancial = activeHagoFinancialService.buildOrderSnapshot(hagoFinancial, orderId);
         }
+        if (inchillFinancial) {
+            orderData.inchillFinancial = new InchillFinancialExecutionService().buildOrderSnapshot(inchillFinancial, orderId);
+        }
         if (idempotencyKey) orderData.idempotencyKey = idempotencyKey;
 
         let order;
@@ -1182,6 +1194,12 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
             throw new BusinessRuleError(
                 'Hago financial orders with an unresolved provider outcome cannot be failed or refunded.',
                 'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
+            );
+        }
+        if (new InchillFinancialExecutionService().isRefundBlocked(order)) {
+            throw new BusinessRuleError(
+                'Inchill financial orders with an unresolved provider outcome cannot be failed or refunded.',
+                'INCHILL_FINANCIAL_RECONCILIATION_REQUIRED'
             );
         }
 

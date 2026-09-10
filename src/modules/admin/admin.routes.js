@@ -97,6 +97,7 @@ const referralPayoutReceiptUpload = createUpload('referral-payout-receipts');
 const usersCtrl = require('./admin.users.controller');
 const providersCtrl = require('./admin.providers.controller');
 const hagoConnectionCtrl = require('../providers/hago/hagoConnection.controller');
+const inchillConnectionCtrl = require('../providers/inchill/inchillConnection.controller');
 const ordersCtrl = require('./admin.orders.controller');
 const walletCtrl = require('./admin.wallet.controller');
 const settingsCtrl = require('./admin.settings.controller');
@@ -284,6 +285,17 @@ router.get('/providers/:id/hago/diagnostics/readiness', requirePermission('MANAG
 router.get('/providers/:id/hago/diagnostics/profile', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.getAgentProfile);
 router.get('/providers/:id/hago/diagnostics/wallet', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.getWalletBalance);
 router.post('/providers/:id/hago/diagnostics/verify-target', requirePermission('MANAGE_SUPPLIERS'), hagoConnectionCtrl.verifyTarget);
+
+// Inchill is an independent, provider-scoped V1 connection. All upstream calls
+// remain server-to-server; these routes never disclose the external API key.
+router.post('/providers/:id/inchill/send-otp', requirePermission('MANAGE_SUPPLIERS'), inchillConnectionCtrl.sendOtp);
+router.post('/providers/:id/inchill/verify-otp', requirePermission('MANAGE_SUPPLIERS'), inchillConnectionCtrl.verifyOtp);
+router.get('/providers/:id/inchill/connection', requirePermission('MANAGE_SUPPLIERS'), inchillConnectionCtrl.getConnection);
+router.post('/providers/:id/inchill/session/validate', requirePermission('MANAGE_SUPPLIERS'), inchillConnectionCtrl.validateSession);
+router.get('/providers/:id/inchill/diagnostics/readiness', requirePermission('MANAGE_SUPPLIERS'), inchillConnectionCtrl.getReadiness);
+router.get('/providers/:id/inchill/diagnostics/profile', requirePermission('MANAGE_SUPPLIERS'), inchillConnectionCtrl.getAgentProfile);
+router.get('/providers/:id/inchill/diagnostics/wallet', requirePermission('MANAGE_SUPPLIERS'), inchillConnectionCtrl.getWalletBalance);
+router.post('/providers/:id/inchill/diagnostics/verify-target', requirePermission('MANAGE_SUPPLIERS'), inchillConnectionCtrl.verifyTarget);
 router.get('/providers/:providerId/products/:externalProductId/price', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.getProductPrice);
 router.patch('/providers/:id/toggle', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.toggleProvider);
 router.get('/providers/:id', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.getProviderById);
@@ -299,6 +311,7 @@ router.post('/orders/:id/retry', requirePermission('CONFIRM_ORDERS'), ordersCtrl
 router.post('/orders/:id/refund', requirePermission('CONFIRM_ORDERS'), ordersCtrl.refundOrder);
 router.post('/orders/:id/sync-status', requirePermission('CONFIRM_ORDERS'), ordersCtrl.syncOrderProviderStatus);
 router.post('/orders/:id/hago/reconcile', requirePermission('CONFIRM_ORDERS'), ordersCtrl.reconcileHagoFinancialOrder);
+router.post('/orders/:id/inchill/reconcile', requirePermission('CONFIRM_ORDERS'), ordersCtrl.reconcileInchillFinancialOrder);
 router.post('/orders/:id/complete', requirePermission('CONFIRM_ORDERS'), ordersCtrl.completeOrder);
 router.patch('/orders/:id/status', requirePermission('CONFIRM_ORDERS'), validateBody(schemas.updateOrderStatus), ordersCtrl.updateStatus);
 router.get('/orders/:id', requirePermission('MANAGE_ORDERS'), ordersCtrl.getOrderById);

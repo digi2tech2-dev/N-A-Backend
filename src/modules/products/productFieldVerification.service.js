@@ -2,6 +2,7 @@
 
 const { Provider } = require('../providers/provider.model');
 const { hagoConnectionService } = require('../providers/hago/hagoConnection.service');
+const { inchillConnectionService } = require('../providers/inchill/inchillConnection.service');
 const { BusinessRuleError } = require('../../shared/errors/AppError');
 const {
     FIELD_VERIFICATION_STRATEGIES,
@@ -44,9 +45,10 @@ const normalizeIdentity = (verification) => ({
 });
 
 class ProductFieldVerificationService {
-    constructor({ providerModel = Provider, hagoService = hagoConnectionService } = {}) {
+    constructor({ providerModel = Provider, hagoService = hagoConnectionService, inchillService = inchillConnectionService } = {}) {
         this.Provider = providerModel;
         this.hagoService = hagoService;
+        this.inchillService = inchillService;
     }
 
     findConfiguredField(product, key) {
@@ -83,14 +85,19 @@ class ProductFieldVerificationService {
         if (!provider || provider.deletedAt || !provider.isActive) {
             throw new BusinessRuleError('Provider verification is temporarily unavailable.', 'PRODUCT_FIELD_PROVIDER_UNAVAILABLE');
         }
-        if (provider.slug !== 'hago') {
+        if (!['hago', 'inchill'].includes(provider.slug)) {
             throw new BusinessRuleError('This provider verification capability is unavailable.', 'PRODUCT_FIELD_VERIFICATION_UNSUPPORTED');
         }
 
         let result;
         try {
-            result = await this.hagoService.verifyTarget(provider._id, { targetId: normalizedValue });
+            result = provider.slug === 'inchill'
+                ? await this.inchillService.verifyTarget(provider._id, { targetId: normalizedValue })
+                : await this.hagoService.verifyTarget(provider._id, { targetId: normalizedValue });
         } catch (error) {
+            if (provider.slug === 'inchill' && error?.code === 'INCHILL_TARGET_INVALID') {
+                throw new BusinessRuleError('The Inchill ID is invalid or unavailable.', 'INCHILL_TARGET_INVALID');
+            }
             if (error?.code === 'HAGO_INVALID_TARGET') {
                 throw new BusinessRuleError('The Hago ID is invalid or unavailable.', 'HAGO_INVALID_TARGET');
             }
@@ -101,6 +108,11 @@ class ProductFieldVerificationService {
                 'HAGO_CONFIGURATION_ERROR',
                 'HAGO_CONNECTION_UNAVAILABLE',
                 'HAGO_SESSION_REAUTH_REQUIRED',
+                'INCHILL_CONNECTION_REQUIRED',
+                'INCHILL_REAUTHENTICATION_REQUIRED',
+                'INCHILL_SESSION_UNKNOWN',
+                'INCHILL_TIMEOUT',
+                'INCHILL_PROVIDER_UNAVAILABLE',
             ].includes(error?.code)
                 ? error.code
                 : 'PRODUCT_FIELD_PROVIDER_UNAVAILABLE';
@@ -108,8 +120,9 @@ class ProductFieldVerificationService {
         }
 
         const identity = normalizeIdentity(result?.verification);
-        if (!identity.vid && !result?.verification?.uid) {
-            throw new BusinessRuleError('The Hago ID is invalid or unavailable.', 'HAGO_INVALID_TARGET');
+        if (!identity.vid && !result?.verification?.uid && !identity.displayName) {
+            const prefix = provider.slug === 'inchill' ? 'INCHILL' : 'HAGO';
+            throw new BusinessRuleError(`The ${provider.slug === 'inchill' ? 'Inchill' : 'Hago'} ID is invalid or unavailable.`, `${prefix}_INVALID_TARGET`);
         }
 
         return {

@@ -299,6 +299,17 @@ const executeOrder = async (orderId, provider = null, auditContext = null) => {
             return { order: unknownOrder, placed: false, refunded: false };
         }
     }
+    if (order.providerCode === 'inchill' && order.inchillFinancial?.serviceType) {
+        const { InchillFinancialExecutionService } = require('../providers/inchill/inchillFinancialExecution.service');
+        const inchillFinancial = new InchillFinancialExecutionService({ refundFailedOrder });
+        try {
+            const result = await inchillFinancial.execute(orderId);
+            if (result.handled) return result;
+        } catch (error) {
+            console.error(`[Fulfillment] Inchill financial execution could not be resolved for ${orderId}:`, error.message);
+            return inchillFinancial._unknown(orderId, 'EXECUTION_ERROR');
+        }
+    }
 
     const actorId = auditContext?.actorId ?? order.userId;
     const actorRole = auditContext?.actorRole ?? ACTOR_ROLES.SYSTEM;

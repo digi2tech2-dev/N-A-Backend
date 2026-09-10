@@ -16,6 +16,7 @@ const { NotFoundError, BusinessRuleError } = require('../../shared/errors/AppErr
 const { createAuditLog } = require('../audit/audit.service');
 const { ADMIN_ACTIONS, ENTITY_TYPES, ACTOR_ROLES } = require('../audit/audit.constants');
 const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
+const { InchillFinancialExecutionService } = require('../providers/inchill/inchillFinancialExecution.service');
 
 const resolveAuditContext = (adminId, auditContext = null) => ({
     actorId: auditContext?.actorId ?? adminId,
@@ -31,6 +32,11 @@ const assertHagoFinancialNotUnresolved = (order, action) => {
             `Hago financial ${action} is blocked until read-only reconciliation proves the provider outcome.`,
             'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
         );
+    }
+};
+const assertInchillFinancialNotUnresolved = (order, action) => {
+    if (new InchillFinancialExecutionService().isRefundBlocked(order)) {
+        throw new BusinessRuleError(`Inchill financial ${action} is blocked until read-only reconciliation completes.`, 'INCHILL_FINANCIAL_RECONCILIATION_REQUIRED');
     }
 };
 
@@ -150,6 +156,7 @@ const retryOrder = async (orderId, adminId, auditContext = null) => {
             'HAGO_FINANCIAL_RETRY_NOT_SUPPORTED'
         );
     }
+    if (order.inchillFinancial?.serviceType) throw new BusinessRuleError('Inchill financial orders cannot use the generic provider retry path.', 'INCHILL_FINANCIAL_RETRY_NOT_SUPPORTED');
 
     if (order.status !== ORDER_STATUS.FAILED) {
         throw new BusinessRuleError(
@@ -217,6 +224,7 @@ const refundOrder = async (orderId, adminId, remains = 0, auditContext = null) =
     if (!order) throw new NotFoundError('Order');
 
     assertHagoFinancialNotUnresolved(order, 'refund');
+    assertInchillFinancialNotUnresolved(order, 'refund');
 
     // Guard: already refunded
     if (order.refunded === true) {
@@ -286,6 +294,7 @@ const syncOrderProviderStatus = async (orderId, adminId, auditContext = null) =>
             'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
         );
     }
+    if (order.inchillFinancial?.serviceType) throw new BusinessRuleError('Use Inchill reconciliation for this financial order.', 'INCHILL_FINANCIAL_RECONCILIATION_REQUIRED');
 
     if (!order.providerOrderId) {
         throw new BusinessRuleError(
@@ -408,6 +417,7 @@ const completeOrder = async (orderId, adminId, auditContext = null) => {
     if (!order) throw new NotFoundError('Order');
 
     assertHagoFinancialNotUnresolved(order, 'completion');
+    assertInchillFinancialNotUnresolved(order, 'completion');
 
     // Hard stop — already completed, nothing to do
     if (order.status === ORDER_STATUS.COMPLETED) {
@@ -537,4 +547,11 @@ const reconcileHagoFinancialOrder = async (orderId, adminId, auditContext = null
     return result;
 };
 
-module.exports = { listOrders, getOrderById, retryOrder, refundOrder, syncOrderProviderStatus, completeOrder, updateOrderStatus, reconcileHagoFinancialOrder };
+const reconcileInchillFinancialOrder = async (orderId, adminId, auditContext = null) => {
+    const ctx = resolveAuditContext(adminId, auditContext);
+    const result = await new InchillFinancialExecutionService().reconcile(orderId);
+    createAuditLog({ actorId: ctx.actorId, actorRole: ctx.actorRole, action: ADMIN_ACTIONS.ORDER_RETRIED, entityType: ENTITY_TYPES.ORDER, entityId: orderId, metadata: { action: 'inchill_read_only_reconciliation', outcome: result.outcome }, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent });
+    return result;
+};
+
+module.exports = { listOrders, getOrderById, retryOrder, refundOrder, syncOrderProviderStatus, completeOrder, updateOrderStatus, reconcileHagoFinancialOrder, reconcileInchillFinancialOrder };

@@ -10,6 +10,7 @@ const {
     updateProductValidation,
     verifyFieldValidation,
     hagoNobilityReadinessValidation,
+    inchillPreflightValidation,
 } = require('./product.validation');
 const validate = require('../../shared/middlewares/validate');
 const authenticate = require('../../shared/middlewares/authenticate');
@@ -61,6 +62,13 @@ router.post(
     authenticate,
     hagoNobilityReadinessValidation, validate,
     productController.hagoNobilityReadiness
+);
+
+router.post(
+    '/:id/inchill/preflight',
+    authenticate,
+    inchillPreflightValidation, validate,
+    productController.inchillPreflight
 );
 
 // ─── Admin only ───────────────────────────────────────────────────────────────

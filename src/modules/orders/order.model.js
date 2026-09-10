@@ -29,6 +29,9 @@ const HAGO_FINANCIAL_MUTATION_STATES = Object.freeze({
     PENDING: 'PENDING',
     UNKNOWN: 'UNKNOWN',
 });
+const INCHILL_FINANCIAL_MUTATION_STATES = Object.freeze({
+    READY: 'READY', CLAIMED: 'CLAIMED', SENT: 'SENT', SUCCESS: 'SUCCESS', FAILED: 'FAILED', PENDING: 'PENDING', UNKNOWN: 'UNKNOWN',
+});
 
 /**
  * Maximum number of automatic status-poll retries before the kill switch fires.
@@ -343,6 +346,19 @@ const orderSchema = new mongoose.Schema(
             reconciliationAttempts: { type: Number, default: 0, min: 0 },
             unknownReason: { type: String, default: null },
         },
+        // Independent Inchill Diamond execution snapshot. The external session
+        // remains in Inchill; N&A persists only safe linkage and outcome data.
+        inchillFinancial: {
+            serviceType: { type: String, enum: ['DIAMOND'], default: null },
+            requestedTargetId: { type: String, default: null },
+            providerAmount: { type: Number, default: null, min: 1 },
+            connectionRef: { type: mongoose.Schema.Types.ObjectId, ref: 'InchillProviderConnection', default: null, select: false },
+            providerMutationKey: { type: String, default: null, select: false },
+            intentFingerprint: { type: String, default: null, select: false },
+            mutationState: { type: String, enum: Object.values(INCHILL_FINANCIAL_MUTATION_STATES), default: null },
+            claimedAt: { type: Date, default: null }, sentAt: { type: Date, default: null }, outcomeAt: { type: Date, default: null },
+            providerTransactionId: { type: String, default: null, select: false }, providerStatus: { type: String, default: null }, providerCode: { type: String, default: null }, timeout: { type: Boolean, default: false }, lastReconciledAt: { type: Date, default: null }, reconciliationAttempts: { type: Number, default: 0, min: 0 }, unknownReason: { type: String, default: null },
+        },
 
         /**
          * Number of status-check attempts made by the cron job.
@@ -452,6 +468,11 @@ orderSchema.index(
 );
 
 orderSchema.index(
+    { status: 1, providerCode: 1, 'inchillFinancial.mutationState': 1, 'inchillFinancial.lastReconciledAt': 1 },
+    { name: 'inchill_financial_reconciliation_queue' }
+);
+
+orderSchema.index(
     { status: 1, providerCode: 1, 'hagoFinancial.mutationState': 1, 'hagoFinancial.lastReconciledAt': 1 },
     { name: 'hago_financial_reconciliation_queue' }
 );
@@ -474,5 +495,6 @@ module.exports = {
     ORDER_STATUS,
     ORDER_EXECUTION_TYPES,
     HAGO_FINANCIAL_MUTATION_STATES,
+    INCHILL_FINANCIAL_MUTATION_STATES,
     MAX_RETRY_COUNT,
 };

@@ -1,6 +1,6 @@
 'use strict';
 
-const { body, param, query } = require('express-validator');
+const { body, checkExact, param, query } = require('express-validator');
 const {
     PRICING_MODES,
     PRICING_STRATEGIES,
@@ -502,6 +502,23 @@ const hagoNobilityReadinessValidation = [
         .isLength({ max: 120 }).withMessage('targetId cannot exceed 120 characters'),
 ];
 
+// Customer requests can only identify the target and requested amount.  The
+// Inchill connection, agent account, provider and mutation key are deliberately
+// derived on the server and must never be accepted from this boundary.
+const inchillPreflightValidation = [
+    param('id').isMongoId().withMessage('Invalid product ID'),
+    checkExact([
+        body('targetId')
+            .exists({ checkNull: true }).withMessage('targetId is required')
+            .isString().withMessage('targetId must be a string')
+            .trim()
+            .notEmpty().withMessage('targetId is required'),
+        body('amount')
+            .exists({ checkNull: true }).withMessage('amount is required')
+            .isFloat({ gt: 0 }).withMessage('amount must be a finite number greater than 0'),
+    ], { locations: ['body'] }),
+];
+
 module.exports = {
     productIdParam,
     listProductsValidation,
@@ -510,4 +527,5 @@ module.exports = {
     updateProductValidation,
     verifyFieldValidation,
     hagoNobilityReadinessValidation,
+    inchillPreflightValidation,
 };

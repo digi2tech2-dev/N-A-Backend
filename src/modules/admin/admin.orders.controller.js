@@ -66,6 +66,10 @@ const reconcileHagoFinancialOrder = catchAsync(async (req, res) => {
     const result = await svc.reconcileHagoFinancialOrder(req.params.id, req.user._id, resolveAuditContext(req));
     sendSuccess(res, result, 'Hago financial reconciliation completed.');
 });
+const reconcileInchillFinancialOrder = catchAsync(async (req, res) => {
+    const result = await svc.reconcileInchillFinancialOrder(req.params.id, req.user._id, resolveAuditContext(req));
+    sendSuccess(res, result, 'Inchill financial reconciliation completed.');
+});
 
 // PATCH /admin/orders/:id/status — unified status update
 const updateStatus = catchAsync(async (req, res) => {
@@ -88,4 +92,4 @@ const updateStatus = catchAsync(async (req, res) => {
     sendSuccess(res, { order }, `Order status updated to ${order.status}.`);
 });
 
-module.exports = { listOrders, getOrderById, retryOrder, refundOrder, syncOrderProviderStatus, completeOrder, reconcileHagoFinancialOrder, updateStatus };
+module.exports = { listOrders, getOrderById, retryOrder, refundOrder, syncOrderProviderStatus, completeOrder, reconcileHagoFinancialOrder, reconcileInchillFinancialOrder, updateStatus };
