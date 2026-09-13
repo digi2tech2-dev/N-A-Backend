@@ -27,6 +27,7 @@
 const cron = require('node-cron');
 const { pollPendingOrders } = require('./orderPolling.service');
 const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
+const { HagoNobilityExecutionService } = require('../providers/hago/hagoNobilityExecution.service');
 const { refundFailedOrder } = require('./orderFulfillment.service');
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -77,6 +78,8 @@ const runOrderPolling = async (options = {}) => {
         // a mutation or retries an UNKNOWN operation.
         const hagoReconciliations = await new HagoFinancialExecutionService({ refundFailedOrder })
             .reconcileScheduled({ limit: 20 });
+        const hagoNobilityReconciliations = await new HagoNobilityExecutionService({ refundFailedOrder })
+            .reconcileScheduled({ limit: 20 });
         const elapsedMs = Date.now() - startedAt;
 
         // ── Summary log ───────────────────────────────────────────────────────
@@ -117,7 +120,7 @@ const runOrderPolling = async (options = {}) => {
             errors: stats.errors,
             polledAt: stats.polledAt,
             elapsedMs,
-            hagoReconciliations: hagoReconciliations.length,
+            hagoReconciliations: hagoReconciliations.length + hagoNobilityReconciliations.length,
         };
 
     } catch (err) {

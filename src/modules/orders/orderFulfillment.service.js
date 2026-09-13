@@ -299,6 +299,21 @@ const executeOrder = async (orderId, provider = null, auditContext = null) => {
             return { order: unknownOrder, placed: false, refunded: false };
         }
     }
+    // Nobility has the same irreversible-upstream safety boundary as Hago
+    // transfers, plus quote-bound pricing. Keep it out of generic fulfillment
+    // so an ambiguous response can never be auto-refunded or retried.
+    if (order.providerCode === 'hago' && order.hagoNobility?.serviceType) {
+        const { HagoNobilityExecutionService } = require('../providers/hago/hagoNobilityExecution.service');
+        const hagoNobility = new HagoNobilityExecutionService({ refundFailedOrder });
+        try {
+            const result = await hagoNobility.execute(orderId);
+            if (result.handled) return result;
+        } catch (error) {
+            console.error(`[Fulfillment] Hago Nobility execution could not be resolved for ${orderId}:`, error.message);
+            const unknownOrder = await hagoNobility.markUnexpectedExecutionError(orderId);
+            return { order: unknownOrder, placed: false, refunded: false };
+        }
+    }
     if (order.providerCode === 'inchill' && order.inchillFinancial?.serviceType) {
         const { InchillFinancialExecutionService } = require('../providers/inchill/inchillFinancialExecution.service');
         const inchillFinancial = new InchillFinancialExecutionService({ refundFailedOrder });

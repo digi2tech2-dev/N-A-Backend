@@ -16,6 +16,7 @@ const { NotFoundError, BusinessRuleError } = require('../../shared/errors/AppErr
 const { createAuditLog } = require('../audit/audit.service');
 const { ADMIN_ACTIONS, ENTITY_TYPES, ACTOR_ROLES } = require('../audit/audit.constants');
 const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
+const { HagoNobilityExecutionService } = require('../providers/hago/hagoNobilityExecution.service');
 const { InchillFinancialExecutionService } = require('../providers/inchill/inchillFinancialExecution.service');
 
 const resolveAuditContext = (adminId, auditContext = null) => ({
@@ -27,7 +28,8 @@ const resolveAuditContext = (adminId, auditContext = null) => ({
 
 const assertHagoFinancialNotUnresolved = (order, action) => {
     const hagoFinancial = new HagoFinancialExecutionService();
-    if (hagoFinancial.isRefundBlocked(order)) {
+    const hagoNobility = new HagoNobilityExecutionService();
+    if (hagoFinancial.isRefundBlocked(order) || hagoNobility.isRefundBlocked(order)) {
         throw new BusinessRuleError(
             `Hago financial ${action} is blocked until read-only reconciliation proves the provider outcome.`,
             'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
@@ -150,9 +152,9 @@ const retryOrder = async (orderId, adminId, auditContext = null) => {
 
     if (!order) throw new NotFoundError('Order');
 
-    if (order.hagoFinancial?.serviceType) {
+    if (order.hagoFinancial?.serviceType || order.hagoNobility?.serviceType) {
         throw new BusinessRuleError(
-            'Hago financial orders cannot be retried through the generic provider retry path.',
+            'Hago financial and Nobility orders cannot be retried through the generic provider retry path.',
             'HAGO_FINANCIAL_RETRY_NOT_SUPPORTED'
         );
     }
@@ -526,7 +528,10 @@ const updateOrderStatus = async (orderId, status, adminId, { rejectionReason, au
 
 const reconcileHagoFinancialOrder = async (orderId, adminId, auditContext = null) => {
     const ctx = resolveAuditContext(adminId, auditContext);
-    const result = await new HagoFinancialExecutionService({
+    const order = await Order.findById(orderId).select('hagoFinancial.serviceType hagoNobility.serviceType');
+    if (!order) throw new NotFoundError('Order');
+    const Executor = order.hagoNobility?.serviceType ? HagoNobilityExecutionService : HagoFinancialExecutionService;
+    const result = await new Executor({
         // Reconciliation may settle an authoritative failure; use the existing
         // exactly-once refund primitive rather than a duplicate implementation.
         refundFailedOrder: async (order) => {

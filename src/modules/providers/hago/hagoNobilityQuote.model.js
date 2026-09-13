@@ -20,6 +20,7 @@ const hagoNobilityQuoteSchema = new mongoose.Schema({
     finalPrice: { type: String, required: true },
     usdAmount: { type: String, required: true },
     currency: { type: String, required: true },
+    rateSnapshot: { type: Number, required: true, min: 0 },
     groupId: { type: mongoose.Schema.Types.ObjectId, ref: 'Group', required: true },
     markupPercentage: { type: Number, required: true, min: 0 },
     readinessAt: { type: Date, required: true },

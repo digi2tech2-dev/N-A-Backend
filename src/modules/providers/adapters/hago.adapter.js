@@ -12,6 +12,7 @@ const HAGO_SUPPORTED_FEATURES = Object.freeze([
     'previews',
     'reconciliation',
     'controlledDiamondCrystalExecution',
+    'controlledNobilityExecution',
 ]);
 
 const nonPricedProduct = ({ externalProductId, rawName, minQty, maxQty, metadata }) => ({
@@ -145,6 +146,10 @@ class HagoAdapter extends BaseProviderAdapter {
         throw new HagoClientError('This Hago service is not enabled for financial execution.', {
             code: 'HAGO_MUTATIONS_DISABLED',
         });
+    }
+
+    async executeControlledNobility({ connectionId, targetId, nobilityType, idempotencyKey }) {
+        return this.client.nobilityRecharge(connectionId, { targetId, nobilityType, idempotencyKey });
     }
 }
 

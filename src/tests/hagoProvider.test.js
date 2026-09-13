@@ -160,6 +160,26 @@ describe('Hago V2 client (read-only)', () => {
     });
 });
 
+describe('Hago V2 controlled Nobility client contract', () => {
+    it('uses the dedicated Nobility auto-recharge endpoint and stable controlled headers', async () => {
+        const httpClient = makeHttpClient();
+        httpClient.post.mockResolvedValueOnce({ status: 200, data: { status: 'SUCCESS', transaction: { id: 'txn_nobility' } } });
+        const client = new HagoClient({ apiKey: 'server-only-key', httpClient });
+
+        await client.nobilityRecharge('con_test', { targetId: '51511', nobilityType: 2, idempotencyKey: 'hago:nobility:order-123' });
+
+        expect(httpClient.post).toHaveBeenCalledWith(
+            '/api/v2/connections/con_test/auto-recharge/nobility',
+            { targetId: '51511', nobilityType: 2 },
+            { headers: {
+                'x-client-api-key': 'server-only-key',
+                'Idempotency-Key': 'hago:nobility:order-123',
+                'X-Controlled-Mutation': 'true',
+            } }
+        );
+    });
+});
+
 describe('Hago adapter', () => {
     it('is resolved by adapter factory for the hago slug without using Provider tokens', () => {
         const adapter = getProviderAdapter(hagoProvider, { strict: true });

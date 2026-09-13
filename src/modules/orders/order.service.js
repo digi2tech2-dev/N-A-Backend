@@ -32,6 +32,7 @@ const { toDecimal, toStr, toFiat, multiply, subtract, add, isPositive, compare }
 const { notifyNewManualOrder, notifyOrderCompleted, notifyOrderFailed } = require('../notifications/notification.service');
 const whatsappService = require('../whatsapp/whatsapp.service');
 const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
+const { HagoNobilityExecutionService } = require('../providers/hago/hagoNobilityExecution.service');
 const { InchillFinancialExecutionService } = require('../providers/inchill/inchillFinancialExecution.service');
 
 const TRANSACTION_UNSUPPORTED_PATTERN = /Transaction numbers are only allowed|replica set member|mongos|transaction.*not supported/i;
@@ -80,6 +81,11 @@ const isDuplicateOrderNumberError = (err) => (
         || err?.keyValue?.orderNumber
         || /orderNumber/.test(String(err?.message || ''))
     )
+);
+
+const isDuplicateNobilityQuoteError = (err) => (
+    err?.code === 11000
+    && (err?.keyPattern?.['hagoNobility.quoteRef'] || err?.keyValue?.['hagoNobility.quoteRef'] || /hago_nobility_quote|hagoNobility\.quoteRef/.test(String(err?.message || '')))
 );
 
 const abortTransactionQuietly = async (session) => {
@@ -458,6 +464,9 @@ const createOrder = async ({
     customInputs = null,
     provider = null,   // ← injected; null = auto-resolve from factory
     hagoFinancialService = null,
+    hagoNobilityService = null,
+    hagoNobilityQuoteRef = null,
+    hagoNobilityTargetId = null,
 }) => {
     const normalizedOrderInput = normalizeOrderInputPayload(orderFieldsValues, customInputs);
 
@@ -530,6 +539,9 @@ const createOrder = async ({
         provider: resolvedProvider,
         providerCode,
         hagoFinancialService,
+        hagoNobilityService,
+        hagoNobilityQuoteRef,
+        hagoNobilityTargetId,
     });
 
 };
@@ -540,7 +552,7 @@ const createOrder = async ({
  * @private
  */
 const _attemptCreateOrder = async (
-    { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode = null, hagoFinancialService = null },
+    { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode = null, hagoFinancialService = null, hagoNobilityService = null, hagoNobilityQuoteRef = null, hagoNobilityTargetId = null },
     isRetry = false,
     forceStandalone = false,
     orderNumberRetryCount = 0
@@ -568,16 +580,6 @@ const _attemptCreateOrder = async (
         if (!product.isActive) {
             throw new BusinessRuleError('This product is currently unavailable.', 'PRODUCT_INACTIVE');
         }
-        // Readiness quotes are deliberately preview-only in Hago Nobility
-        // Phase 1. Reject before quantity, pricing, wallet debit, or generic
-        // provider fulfillment can run.
-        if (product.pricingStrategy === PRICING_STRATEGIES.HAGO_NOBILITY_READINESS) {
-            throw new BusinessRuleError(
-                'Hago Nobility checkout is not enabled yet.',
-                'HAGO_NOBILITY_CHECKOUT_NOT_ENABLED'
-            );
-        }
-
         // ── 2. Validate Quantity Bounds ────────────────────────────────────────
         const qty = parseInt(quantity, 10);
         if (qty < product.minQty || qty > product.maxQty) {
@@ -585,6 +587,23 @@ const _attemptCreateOrder = async (
                 `Quantity must be between ${product.minQty} and ${product.maxQty}.`,
                 'QUANTITY_OUT_OF_RANGE'
             );
+        }
+
+        // Nobility is priced and target-bound by a short-lived server quote.
+        // The checkout gate, quote binding, and fixed quantity are enforced
+        // before customer funds can be debited.
+        const activeHagoNobilityService = hagoNobilityService ?? new HagoNobilityExecutionService();
+        const hagoNobility = product.pricingStrategy === PRICING_STRATEGIES.HAGO_NOBILITY_READINESS
+            ? await activeHagoNobilityService.prepareNewOrder({
+                userId,
+                product,
+                quantity: qty,
+                quoteRef: hagoNobilityQuoteRef,
+                targetId: hagoNobilityTargetId,
+            })
+            : null;
+        if (hagoNobility?.existingOrder) {
+            return { order: hagoNobility.existingOrder, idempotent: true };
         }
 
         // ── 2b. Validate / capture dynamic order fields ─────────────────────────
@@ -636,8 +655,7 @@ const _attemptCreateOrder = async (
 
         // Hago Diamond/Crystal keeps the existing quantity-as-provider-amount
         // semantics of these dynamic synthetic services, but obtains a trusted
-        // target and local connection reference before any wallet debit. The
-        // Nobility checkout guard above remains an earlier hard stop.
+        // target and local connection reference before any wallet debit.
         const activeHagoFinancialService = hagoFinancialService ?? new HagoFinancialExecutionService();
         const hagoFinancial = await activeHagoFinancialService.prepareNewOrder({
             product,
@@ -666,7 +684,7 @@ const _attemptCreateOrder = async (
         // proceeds with the cached DB price.  A transient outage should NOT
         // block legitimate orders.
         //
-        if (product.provider && product.providerProduct && provider) {
+        if (!hagoNobility && product.provider && product.providerProduct && provider) {
             try {
                 // Look up the externalProductId from the linked ProviderProduct
                 const ppDoc = await ProviderProduct.findById(product.providerProduct)
@@ -714,10 +732,10 @@ const _attemptCreateOrder = async (
 
         const isQuantityOnly = userGroupDoc?.billingMode === 'quantity_only';
 
-        if ((hagoFinancial || inchillFinancial) && isQuantityOnly) {
+        if ((hagoFinancial || inchillFinancial || hagoNobility) && isQuantityOnly) {
             throw new BusinessRuleError(
-                `${hagoFinancial ? 'Hago' : 'Inchill'} financial fulfillment is not available for quantity-only billing groups.`,
-                hagoFinancial ? 'HAGO_FINANCIAL_QUANTITY_ONLY_NOT_SUPPORTED' : 'INCHILL_FINANCIAL_QUANTITY_ONLY_NOT_SUPPORTED'
+                `${hagoFinancial || hagoNobility ? 'Hago' : 'Inchill'} financial fulfillment is not available for quantity-only billing groups.`,
+                hagoFinancial || hagoNobility ? 'HAGO_FINANCIAL_QUANTITY_ONLY_NOT_SUPPORTED' : 'INCHILL_FINANCIAL_QUANTITY_ONLY_NOT_SUPPORTED'
             );
         }
 
@@ -797,7 +815,7 @@ const _attemptCreateOrder = async (
                     await abortTransactionQuietly(session);
                     endSessionQuietly(session);
                     return _attemptCreateOrder(
-                        { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService },
+                        { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService, hagoNobilityService, hagoNobilityQuoteRef, hagoNobilityTargetId },
                         isRetry,
                         forceStandalone,
                         orderNumberRetryCount + 1
@@ -882,8 +900,15 @@ const _attemptCreateOrder = async (
         // ── END Quantity-Only Branch ─────────────────────────────────────────
 
         // ── 3. Pricing Engine (USD) ────────────────────────────────────────────
-        const pricing = await calculateUserPrice(userId, product.basePrice, session);
-        const usdTotalPrice = multiply(pricing.finalPrice, String(qty));
+        const pricing = hagoNobility
+            ? {
+                basePrice: hagoNobility.quote.branchBasePrice,
+                markupPercentage: hagoNobility.quote.markupPercentage,
+                finalPrice: hagoNobility.quote.usdAmount,
+                groupId: hagoNobility.quote.groupId,
+            }
+            : await calculateUserPrice(userId, product.basePrice, session);
+        const usdTotalPrice = hagoNobility ? String(hagoNobility.quote.usdAmount) : multiply(pricing.finalPrice, String(qty));
 
         // ── 3a. Profit Calculation (USD) ────────────────────────────────────────
         // Manual products can define costPrice explicitly. For provider-linked
@@ -902,8 +927,13 @@ const _attemptCreateOrder = async (
         // Fetch the user's preferred currency (within the session for consistency).
         // For USD users this is a no-op (rate = 1, finalAmount = usdTotalPrice).
         const userDoc = await User.findById(userId).select('currency').session(session);
-        const userCurrency = userDoc?.currency ?? 'USD';
-        const conversion = await convertUsdToUserCurrency(Number(toDecimal(usdTotalPrice).toNumber()), userCurrency);
+        const userCurrency = hagoNobility ? hagoNobility.quote.currency : (userDoc?.currency ?? 'USD');
+        if (hagoNobility && String(userDoc?.currency ?? 'USD').toUpperCase() !== String(userCurrency).toUpperCase()) {
+            throw new BusinessRuleError('Your currency changed after this Hago Nobility quote. Refresh the quote and try again.', 'HAGO_NOBILITY_QUOTE_MISMATCH');
+        }
+        const conversion = hagoNobility
+            ? { finalAmount: hagoNobility.quote.finalPrice, rate: hagoNobility.quote.rateSnapshot }
+            : await convertUsdToUserCurrency(Number(toDecimal(usdTotalPrice).toNumber()), userCurrency);
         // ── FINAL ROUNDING — only place we round to 2dp ────────────────────
         const chargedAmount = toFiat(conversion.finalAmount);
         const rateSnapshot = conversion.rate;
@@ -968,6 +998,9 @@ const _attemptCreateOrder = async (
         if (hagoFinancial) {
             orderData.hagoFinancial = activeHagoFinancialService.buildOrderSnapshot(hagoFinancial, orderId);
         }
+        if (hagoNobility) {
+            orderData.hagoNobility = activeHagoNobilityService.buildOrderSnapshot(hagoNobility, orderId);
+        }
         if (inchillFinancial) {
             orderData.inchillFinancial = new InchillFinancialExecutionService().buildOrderSnapshot(inchillFinancial, orderId);
         }
@@ -996,13 +1029,13 @@ const _attemptCreateOrder = async (
                 await abortTransactionQuietly(session);
                 endSessionQuietly(session);
                 return _attemptCreateOrder(
-                    { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService },
+                    { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService, hagoNobilityService, hagoNobilityQuoteRef, hagoNobilityTargetId },
                     isRetry,
                     forceStandalone,
                     orderNumberRetryCount + 1
                 );
             }
-            if (createErr.code === 11000 && idempotencyKey) {
+            if ((createErr.code === 11000 && idempotencyKey) || (hagoNobility && isDuplicateNobilityQuoteError(createErr))) {
                 if (!session) {
                     await refundWalletAtomic({
                         userId,
@@ -1016,7 +1049,9 @@ const _attemptCreateOrder = async (
                 }
                 await abortTransactionQuietly(session);
                 endSessionQuietly(session);
-                const existing = await Order.findOne({ userId, idempotencyKey })
+                const existing = await Order.findOne(hagoNobility && isDuplicateNobilityQuoteError(createErr)
+                    ? { 'hagoNobility.quoteRef': hagoNobility.quote.quoteRef }
+                    : { userId, idempotencyKey })
                     .populate('productId', 'name basePrice executionType providerProduct');
                 return { order: existing, idempotent: true };
             }
@@ -1129,7 +1164,7 @@ const _attemptCreateOrder = async (
             endSessionQuietly(session);
             console.warn('[Order] MongoDB transactions are unavailable; retrying order creation without a session.');
             return _attemptCreateOrder(
-                { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService },
+                { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService, hagoNobilityService, hagoNobilityQuoteRef, hagoNobilityTargetId },
                 true,
                 true,
                 orderNumberRetryCount
@@ -1140,7 +1175,7 @@ const _attemptCreateOrder = async (
             endSessionQuietly(session);
             await new Promise((r) => setTimeout(r, 10));
             return _attemptCreateOrder(
-                { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService },
+                { userId, productId, quantity, idempotencyKey, auditContext, orderFieldsValues, provider, providerCode, hagoFinancialService, hagoNobilityService, hagoNobilityQuoteRef, hagoNobilityTargetId },
                 true,
                 forceStandalone,
                 orderNumberRetryCount
@@ -1193,6 +1228,12 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
         if (new HagoFinancialExecutionService().isRefundBlocked(order)) {
             throw new BusinessRuleError(
                 'Hago financial orders with an unresolved provider outcome cannot be failed or refunded.',
+                'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
+            );
+        }
+        if (new HagoNobilityExecutionService().isRefundBlocked(order)) {
+            throw new BusinessRuleError(
+                'Hago Nobility orders with an unresolved provider outcome cannot be failed or refunded.',
                 'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
             );
         }
@@ -1386,6 +1427,12 @@ const processOrderRefund = async (orderId, remains = 0, auditContext = null) => 
         if (new HagoFinancialExecutionService().isRefundBlocked(order)) {
             throw new BusinessRuleError(
                 'Hago financial orders with an unresolved provider outcome cannot be refunded.',
+                'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
+            );
+        }
+        if (new HagoNobilityExecutionService().isRefundBlocked(order)) {
+            throw new BusinessRuleError(
+                'Hago Nobility orders with an unresolved provider outcome cannot be refunded.',
                 'HAGO_FINANCIAL_RECONCILIATION_REQUIRED'
             );
         }

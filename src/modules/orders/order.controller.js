@@ -43,10 +43,34 @@ const normalizeCustomInputsPayload = (customInputs) => {
     return {};
 };
 
+// `select: false` protects fetched documents, but newly-created Mongoose
+// documents still contain their in-memory private fields. Keep the customer
+// API boundary explicit so a checkout response cannot disclose provider
+// credentials, mutation identifiers, cost, or raw upstream evidence.
+const serializeCustomerOrder = (order) => {
+    const serialized = order?.toObject ? order.toObject() : { ...order };
+    delete serialized.providerRawResponse;
+    if (!serialized?.hagoNobility) return serialized;
+
+    [
+        'quoteRef',
+        'readinessConfigFingerprint',
+        'branchBasePrice',
+        'providerDiamondCost',
+        'providerCostCurrency',
+        'connectionRef',
+        'providerMutationKey',
+        'providerTransactionId',
+        'providerCode',
+        'unknownReason',
+    ].forEach((field) => delete serialized.hagoNobility[field]);
+    return serialized;
+};
+
 // ── Customer Endpoints ────────────────────────────────────────────────────────
 
 const createOrder = catchAsync(async (req, res) => {
-    const { productId, quantity, orderFieldsValues, customInputs, link, target } = req.body;
+    const { productId, quantity, orderFieldsValues, customInputs, link, target, hagoNobility } = req.body;
 
     // Merge top-level link/target into orderFieldsValues so they always
     // reach customerInput (SMM providers need these as provider params).
@@ -77,14 +101,25 @@ const createOrder = catchAsync(async (req, res) => {
         quantity: parseInt(quantity, 10),
         idempotencyKey,
         orderFieldsValues: finalFields,
+        hagoNobilityQuoteRef: hagoNobility?.quoteRef,
+        hagoNobilityTargetId: hagoNobility?.targetId,
         auditContext,
     });
 
     if (idempotent) {
-        return sendSuccess(res, order, 'Order already exists (idempotent response).');
+        return sendSuccess(res, serializeCustomerOrder(order), 'Order already exists (idempotent response).');
     }
 
-    sendCreated(res, order, 'Order placed successfully.');
+    if (['READY', 'CLAIMED', 'SENT', 'PENDING', 'UNKNOWN'].includes(order?.hagoNobility?.mutationState)) {
+        return sendSuccess(
+            res,
+            serializeCustomerOrder(order),
+            'Hago Nobility order received and pending confirmation.',
+            202
+        );
+    }
+
+    sendCreated(res, serializeCustomerOrder(order), 'Order placed successfully.');
 });
 
 const getMyOrders = catchAsync(async (req, res) => {
@@ -96,12 +131,12 @@ const getMyOrders = catchAsync(async (req, res) => {
         limit,
     });
 
-    sendPaginated(res, orders, pagination, 'Orders retrieved successfully.');
+    sendPaginated(res, orders.map(serializeCustomerOrder), pagination, 'Orders retrieved successfully.');
 });
 
 const getMyOrder = catchAsync(async (req, res) => {
     const order = await orderService.getOrderById(req.params.id, req.user._id);
-    sendSuccess(res, order);
+    sendSuccess(res, serializeCustomerOrder(order));
 });
 
 // ── Admin Endpoints ───────────────────────────────────────────────────────────

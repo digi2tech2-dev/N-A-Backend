@@ -337,6 +337,15 @@ class HagoClient {
             { 'Idempotency-Key': requireIdempotencyKey(idempotencyKey), 'X-Controlled-Mutation': 'true' }
         );
     }
+
+    nobilityRecharge(connectionId, { targetId, nobilityType, idempotencyKey }) {
+        return this._postFinancial(
+            `/api/v2/connections/${encodeURIComponent(requireOpaqueId(connectionId, 'connectionId'))}/auto-recharge/nobility`,
+            { targetId: requireOpaqueId(targetId, 'targetId'), nobilityType: requireNobilityType(nobilityType) },
+            'Nobility recharge',
+            { 'Idempotency-Key': requireIdempotencyKey(idempotencyKey), 'X-Controlled-Mutation': 'true' }
+        );
+    }
 }
 
 module.exports = {

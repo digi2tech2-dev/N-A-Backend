@@ -239,8 +239,6 @@ const orderSchema = new mongoose.Schema(
         idempotencyKey: {
             type: String,
             trim: true,
-            default: null,
-            sparse: true,
         },
 
         // ── Timestamps for audit ─────────────────────────────────────────────
@@ -308,20 +306,30 @@ const orderSchema = new mongoose.Schema(
          * order or stores upstream session material here.
          */
         hagoNobility: {
+            serviceType: { type: String, enum: ['NOBILITY'], default: null },
+            quoteRef: { type: String, select: false },
             selectedType: { type: Number, min: 1, max: 4, default: null },
             selectedName: { type: String, default: null },
             requestedTargetId: { type: String, default: null },
             operation: { type: String, enum: ['PURCHASE', 'RENEW'], default: null },
             readinessAt: { type: Date, default: null },
-            readinessConfigFingerprint: { type: String, default: null },
-            providerDiamondCost: { type: Number, default: null, min: 0 },
-            providerCostCurrency: { type: String, default: null },
+            readinessConfigFingerprint: { type: String, default: null, select: false },
+            providerDiamondCost: { type: Number, default: null, min: 0, select: false },
+            providerCostCurrency: { type: String, default: null, select: false },
             pricingBranch: { type: String, enum: ['purchase', 'renewal'], default: null },
-            branchBasePrice: { type: String, default: null },
-            connectionRef: { type: mongoose.Schema.Types.ObjectId, ref: 'HagoProviderConnection', default: null },
-            mutationState: { type: String, default: null },
-            providerMutationKey: { type: String, default: null },
-            providerTransactionId: { type: String, default: null },
+            branchBasePrice: { type: String, default: null, select: false },
+            connectionRef: { type: mongoose.Schema.Types.ObjectId, ref: 'HagoProviderConnection', default: null, select: false },
+            mutationState: { type: String, enum: Object.values(HAGO_FINANCIAL_MUTATION_STATES), default: null },
+            providerMutationKey: { type: String, default: null, select: false },
+            providerTransactionId: { type: String, default: null, select: false },
+            providerStatus: { type: String, default: null },
+            providerCode: { type: String, default: null, select: false },
+            claimedAt: { type: Date, default: null },
+            sentAt: { type: Date, default: null },
+            outcomeAt: { type: Date, default: null },
+            lastReconciledAt: { type: Date, default: null },
+            reconciliationAttempts: { type: Number, default: 0, min: 0 },
+            unknownReason: { type: String, default: null },
         },
 
         /**
@@ -461,10 +469,29 @@ orderSchema.index({ userId: 1, createdAt: -1 });
 orderSchema.index({ status: 1 });
 orderSchema.index({ groupIdSnapshot: 1 });
 
-/** Idempotency enforcement — sparse because not all orders carry a key. */
+/** Generic request de-duplication applies only when the caller supplied a string key. */
 orderSchema.index(
     { userId: 1, idempotencyKey: 1 },
-    { unique: true, sparse: true, name: 'unique_user_idempotency_key' }
+    {
+        unique: true,
+        partialFilterExpression: { idempotencyKey: { $type: 'string' } },
+        name: 'unique_user_idempotency_key',
+    }
+);
+
+/** A readiness quote can create only one order, even across retries/tabs. */
+orderSchema.index(
+    { 'hagoNobility.quoteRef': 1 },
+    {
+        unique: true,
+        partialFilterExpression: { 'hagoNobility.quoteRef': { $type: 'string' } },
+        name: 'unique_hago_nobility_quote',
+    }
+);
+
+orderSchema.index(
+    { status: 1, providerCode: 1, 'hagoNobility.mutationState': 1, 'hagoNobility.lastReconciledAt': 1 },
+    { name: 'hago_nobility_reconciliation_queue' }
 );
 
 orderSchema.index(

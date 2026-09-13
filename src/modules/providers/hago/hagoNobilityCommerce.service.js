@@ -198,6 +198,7 @@ class HagoNobilityCommerceService {
             finalPrice,
             usdAmount: String(userPricing.finalPrice),
             currency: conversion.currency,
+            rateSnapshot: Number(conversion.rate),
             groupId: userPricing.groupId,
             markupPercentage: userPricing.markupPercentage,
             readinessAt: now,

@@ -26,6 +26,16 @@ const createOrderValidation = [
             if (typeof value === 'object') return true;
             throw new Error('customInputs must be an object or an array');
         }),
+
+    body('hagoNobility')
+        .optional({ nullable: true })
+        .isObject().withMessage('hagoNobility must be an object'),
+    body('hagoNobility.quoteRef')
+        .if(body('hagoNobility').exists({ checkNull: true }))
+        .isString().trim().notEmpty().withMessage('A Hago Nobility quote reference is required'),
+    body('hagoNobility.targetId')
+        .if(body('hagoNobility').exists({ checkNull: true }))
+        .isString().trim().notEmpty().withMessage('A Hago Nobility target ID is required'),
 ];
 
 const orderIdParamValidation = [
@@ -34,4 +44,3 @@ const orderIdParamValidation = [
 ];
 
 module.exports = { createOrderValidation, orderIdParamValidation };
-
