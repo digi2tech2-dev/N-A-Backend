@@ -1,6 +1,14 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const { requireExactStringInput, assertCanonicalUnits } = require('../../shared/utils/exactLedgerMoney');
+
+const isCanonicalLedgerUnits = (options) => (value) => {
+    if (value == null) return true;
+    try { return assertCanonicalUnits(value, options) === value; } catch (_) { return false; }
+};
+
+const exactStringSetter = (label) => (value) => requireExactStringInput(value, { label });
 
 /**
  * Wallet transaction types.
@@ -49,14 +57,40 @@ const walletTransactionSchema = new mongoose.Schema(
             min: [0.01, 'Amount must be greater than 0'],
         },
 
+        // Phase 1 exact-ledger compatibility snapshots. The existing Number
+        // fields above remain authoritative until an explicit ledger cut-over.
+        amountUnits: {
+            type: String,
+            default: null,
+            select: false,
+            set: exactStringSetter('amountUnits'),
+            validate: { validator: isCanonicalLedgerUnits({ allowNegative: false, allowZero: false, label: 'amountUnits' }), message: 'amountUnits must be canonical positive exact ledger units' },
+        },
+
         balanceBefore: {
             type: Number,
             required: [true, 'Balance before is required'],
         },
 
+        balanceBeforeUnits: {
+            type: String,
+            default: null,
+            select: false,
+            set: exactStringSetter('balanceBeforeUnits'),
+            validate: { validator: isCanonicalLedgerUnits({ allowNegative: true, label: 'balanceBeforeUnits' }), message: 'balanceBeforeUnits must be canonical exact ledger units' },
+        },
+
         balanceAfter: {
             type: Number,
             required: [true, 'Balance after is required'],
+        },
+
+        balanceAfterUnits: {
+            type: String,
+            default: null,
+            select: false,
+            set: exactStringSetter('balanceAfterUnits'),
+            validate: { validator: isCanonicalLedgerUnits({ allowNegative: true, label: 'balanceAfterUnits' }), message: 'balanceAfterUnits must be canonical exact ledger units' },
         },
 
         reference: {

@@ -5,6 +5,15 @@ const bcrypt = require('bcryptjs');
 const config = require('../../config/config');
 const { generateReferralCode } = require('../../shared/utils/referralCode');
 const { buildPublicWalletSummary, buildWalletSummary } = require('../../shared/utils/walletSummary');
+const { requireExactStringInput, assertCanonicalUnits } = require('../../shared/utils/exactLedgerMoney');
+
+const isCanonicalLedgerUnits = (options) => (value) => {
+    if (value == null) return true;
+    try { return assertCanonicalUnits(value, options) === value; } catch (_) { return false; }
+};
+
+const exactStringSetter = (label) => (value) => requireExactStringInput(value, { label });
+const isSafeLedgerVersion = (value) => value == null || (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0);
 
 /**
  * User roles enum — single source of truth.
@@ -357,6 +366,40 @@ const userSchema = new mongoose.Schema(
             type: Number,
             default: 0,
             min: [0, 'Credit used cannot be negative'],
+        },
+
+        // Phase 1 exact-ledger compatibility fields. These are intentionally
+        // optional and are NOT authoritative until the dedicated ledger
+        // cut-over. Values are signed, scale-56 integer strings.
+        walletBalanceUnits: {
+            type: String,
+            default: null,
+            select: false,
+            set: exactStringSetter('walletBalanceUnits'),
+            validate: { validator: isCanonicalLedgerUnits({ allowNegative: true, label: 'walletBalanceUnits' }), message: 'walletBalanceUnits must be canonical exact ledger units' },
+        },
+
+        creditLimitUnits: {
+            type: String,
+            default: null,
+            select: false,
+            set: exactStringSetter('creditLimitUnits'),
+            validate: { validator: isCanonicalLedgerUnits({ allowNegative: false, label: 'creditLimitUnits' }), message: 'creditLimitUnits must be canonical non-negative exact ledger units' },
+        },
+
+        creditUsedUnits: {
+            type: String,
+            default: null,
+            select: false,
+            set: exactStringSetter('creditUsedUnits'),
+            validate: { validator: isCanonicalLedgerUnits({ allowNegative: false, label: 'creditUsedUnits' }), message: 'creditUsedUnits must be canonical non-negative exact ledger units' },
+        },
+
+        // Reserved for a future compare-and-set exact-ledger writer.
+        walletLedgerVersion: {
+            type: Number,
+            default: null,
+            validate: { validator: isSafeLedgerVersion, message: 'walletLedgerVersion must be a non-negative safe integer' },
         },
 
         // ── Quantity-Only Billing ─────────────────────────────────────────────

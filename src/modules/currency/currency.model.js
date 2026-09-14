@@ -1,6 +1,14 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const { requireExactStringInput, normalizePlatformRateExact } = require('../../shared/utils/exactLedgerMoney');
+
+const isCanonicalPlatformRateExact = (value) => {
+    if (value == null) return true;
+    try { return normalizePlatformRateExact(value) === value; } catch (_) { return false; }
+};
+
+const exactStringSetter = (value) => requireExactStringInput(value, { label: 'platformRateExact' });
 
 /**
  * currency.model.js
@@ -60,6 +68,17 @@ const currencySchema = new mongoose.Schema(
             type: Number,
             required: [true, 'Platform rate is required'],
             min: [0.000001, 'Platform rate must be positive'],
+        },
+
+        // Phase 1 compatibility representation of the existing six-decimal
+        // platform-rate semantics. It is deliberately additive; all current
+        // conversion code continues to read platformRate.
+        platformRateExact: {
+            type: String,
+            default: null,
+            select: false,
+            set: exactStringSetter,
+            validate: { validator: isCanonicalPlatformRateExact, message: 'platformRateExact must use canonical six-decimal rate semantics' },
         },
 
         /**

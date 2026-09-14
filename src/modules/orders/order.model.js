@@ -1,6 +1,14 @@
 'use strict';
 
 const mongoose = require('mongoose');
+const { requireExactStringInput, assertCanonicalUnits } = require('../../shared/utils/exactLedgerMoney');
+
+const isCanonicalLedgerUnits = (options) => (value) => {
+    if (value == null) return true;
+    try { return assertCanonicalUnits(value, options) === value; } catch (_) { return false; }
+};
+
+const exactStringSetter = (label) => (value) => requireExactStringInput(value, { label });
 
 const ORDER_STATUS = Object.freeze({
     PENDING: 'PENDING',
@@ -207,6 +215,32 @@ const orderSchema = new mongoose.Schema(
             type: Number,
             default: null,
             min: [0, 'chargedAmount cannot be negative'],
+        },
+
+        // Phase 1 additive exact customer-ledger snapshots. These fields are
+        // not read by current checkout, provider execution, or refund logic.
+        chargedAmountUnits: {
+            type: String,
+            default: null,
+            select: false,
+            set: exactStringSetter('chargedAmountUnits'),
+            validate: { validator: isCanonicalLedgerUnits({ allowNegative: false, label: 'chargedAmountUnits' }), message: 'chargedAmountUnits must be canonical non-negative exact ledger units' },
+        },
+
+        walletDeductedUnits: {
+            type: String,
+            default: null,
+            select: false,
+            set: exactStringSetter('walletDeductedUnits'),
+            validate: { validator: isCanonicalLedgerUnits({ allowNegative: false, label: 'walletDeductedUnits' }), message: 'walletDeductedUnits must be canonical non-negative exact ledger units' },
+        },
+
+        creditUsedAmountUnits: {
+            type: String,
+            default: null,
+            select: false,
+            set: exactStringSetter('creditUsedAmountUnits'),
+            validate: { validator: isCanonicalLedgerUnits({ allowNegative: false, label: 'creditUsedAmountUnits' }), message: 'creditUsedAmountUnits must be canonical non-negative exact ledger units' },
         },
 
         // ── Order Status ─────────────────────────────────────────────────────
