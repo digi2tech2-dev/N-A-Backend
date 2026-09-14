@@ -28,8 +28,51 @@ class InchillConnectionService {
     async verifyOtp(providerId, input = {}) { await this._provider(providerId); const otp = String(input.otp ?? '').trim(); if (!/^\d{4,8}$/.test(otp)) throw new ValidationError('otp must be 4 to 8 digits.'); const connection = await this._connection(providerId, true); const pending = connection?.pendingLogin; if (!pending || !pending.expiresAt || pending.expiresAt <= this.now()) throw new BusinessRuleError('No active Inchill OTP request exists.', 'INCHILL_OTP_EXPIRED'); try { await this.client.verifyOtp({ phone: pending.phone, otp, deviceId: pending.deviceId, country: pending.country, language: pending.language }); } catch (error) { throw this._safe(error, 'OTP verification'); }
         connection.agentPhone = pending.phone; connection.countryCode = pending.countryCode; connection.country = pending.country; connection.language = pending.language; connection.connectionStatus = INCHILL_CONNECTION_STATUS.CONNECTED; connection.lastSuccessfulAt = this.now(); connection.pendingLogin = undefined; await connection.save(); return { connection: serialize(connection) }; }
     async getConnection(providerId) { await this._provider(providerId); const connection = await this._connection(providerId, true); if (connection?.pendingLogin?.expiresAt <= this.now()) { connection.pendingLogin = undefined; if (!connection.agentPhone) connection.connectionStatus = INCHILL_CONNECTION_STATUS.UNKNOWN; await connection.save(); } return { connection: serialize(connection) }; }
-    async validateSession(providerId) { await this._provider(providerId); const connection = await this._connectionOrThrow(providerId); let result; try { result = await this.client.validateSession(connection.agentPhone); } catch (error) { connection.connectionStatus = INCHILL_CONNECTION_STATUS.UNKNOWN; connection.lastValidationStatus = 'UNKNOWN'; connection.lastValidatedAt = this.now(); await connection.save(); throw this._safe(error, 'session validation'); }
-        const status = String(result.data?.session?.status ?? 'UNKNOWN').toUpperCase(); connection.lastValidatedAt = this.now(); connection.lastValidationStatus = ['VALID', 'REJECTED'].includes(status) ? status : 'UNKNOWN'; connection.connectionStatus = status === 'VALID' ? INCHILL_CONNECTION_STATUS.CONNECTED : status === 'REJECTED' ? INCHILL_CONNECTION_STATUS.REAUTH_REQUIRED : INCHILL_CONNECTION_STATUS.UNKNOWN; await connection.save(); return { connection: serialize(connection), session: { status: connection.lastValidationStatus } }; }
+    async validateSession(providerId) {
+        await this._provider(providerId);
+        // Include pendingLogin so an authoritative validation can clear stale
+        // OTP state before the serialized result is returned.
+        const connection = await this._connection(providerId, true);
+        if (!connection?.agentPhone || !connection.enabled) {
+            throw new BusinessRuleError('No enabled Inchill connection is available.', 'INCHILL_CONNECTION_REQUIRED');
+        }
+
+        let result;
+        try {
+            result = await this.client.validateSession(connection.agentPhone);
+        } catch (error) {
+            // A transport failure is not evidence that the account is
+            // disconnected. Persist only the conservative UNKNOWN result.
+            connection.connectionStatus = INCHILL_CONNECTION_STATUS.UNKNOWN;
+            connection.lastValidationStatus = 'UNKNOWN';
+            connection.lastValidatedAt = this.now();
+            await connection.save();
+            throw this._safe(error, 'session validation');
+        }
+
+        const upstreamStatus = String(result.data?.session?.status ?? 'UNKNOWN').toUpperCase();
+        const validatedAt = this.now();
+        const isValid = ['VALID', 'CONNECTED'].includes(upstreamStatus);
+        const requiresReauth = ['REJECTED', 'REAUTH_REQUIRED'].includes(upstreamStatus);
+
+        connection.lastValidatedAt = validatedAt;
+        if (isValid) {
+            connection.lastValidationStatus = 'VALID';
+            connection.connectionStatus = INCHILL_CONNECTION_STATUS.CONNECTED;
+            connection.lastSuccessfulAt = validatedAt;
+            connection.pendingLogin = undefined;
+        } else if (requiresReauth) {
+            connection.lastValidationStatus = 'REJECTED';
+            connection.connectionStatus = INCHILL_CONNECTION_STATUS.REAUTH_REQUIRED;
+            connection.pendingLogin = undefined;
+        } else {
+            connection.lastValidationStatus = 'UNKNOWN';
+            connection.connectionStatus = INCHILL_CONNECTION_STATUS.UNKNOWN;
+        }
+
+        await connection.save();
+        return { connection: serialize(connection), session: { status: connection.lastValidationStatus } };
+    }
     async getAgentProfile(providerId) { await this._provider(providerId); const connection = await this._connectionOrThrow(providerId); try { return { profile: normalizeIdentity((await this.client.getAgentProfile(connection.agentPhone)).data) }; } catch (error) { throw this._safe(error, 'profile lookup'); } }
     async getWalletBalance(providerId) { await this._provider(providerId); const connection = await this._connectionOrThrow(providerId); try { return { wallet: normalizeWallet((await this.client.getWalletBalance(connection.agentPhone)).data) }; } catch (error) { throw this._safe(error, 'wallet lookup'); } }
     async verifyTarget(providerId, { targetId } = {}) { await this._provider(providerId); const normalized = String(targetId ?? '').trim(); if (!normalized) throw new ValidationError('targetId is required.'); const connection = await this._connectionOrThrow(providerId); try { const result = await this.client.verifyTarget(connection.agentPhone, normalized); const identity = normalizeIdentity(result.data, normalized); if (!identity.vid && !identity.nickName) throw new BusinessRuleError('The Inchill ID is invalid or unavailable.', 'INCHILL_TARGET_INVALID'); return { verification: identity }; } catch (error) { if (error instanceof AppError) throw error; if (error instanceof InchillClientError && ['INCHILL_TARGET_INVALID'].includes(error.code)) throw new BusinessRuleError('The Inchill ID is invalid or unavailable.', 'INCHILL_TARGET_INVALID'); throw this._safe(error, 'target verification'); } }

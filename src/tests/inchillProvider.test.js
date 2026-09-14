@@ -194,6 +194,57 @@ describe('Inchill OTP connection lifecycle', () => {
         expect(stored.connectionStatus).toBe('OTP_PENDING');
         expect(stored.agentPhone).toBeNull();
     });
+
+    it('persists a legacy UNKNOWN connection as CONNECTED after an authoritative connected session validation', async () => {
+        const provider = await createProvider();
+        const validatedAt = new Date('2026-09-14T10:00:00.000Z');
+        await InchillProviderConnection.create({
+            provider: provider._id,
+            agentPhone: '+201234567890',
+            isPrimary: true,
+            enabled: true,
+            connectionStatus: 'UNKNOWN',
+            pendingLogin: { phone: '+201234567890', expiresAt: new Date('2026-09-14T10:10:00.000Z') },
+        });
+        const client = { validateSession: jest.fn().mockResolvedValue({ data: { session: { status: 'CONNECTED' } } }) };
+        const service = new InchillConnectionService({ client, now: () => validatedAt });
+
+        const validated = await service.validateSession(provider._id);
+        const stored = await InchillProviderConnection.findOne({ provider: provider._id }).select('+pendingLogin.expiresAt');
+        const serialized = await service.getConnection(provider._id);
+
+        expect(validated.connection).toMatchObject({ connectionStatus: 'CONNECTED', lastValidationStatus: 'VALID', hasConnection: true });
+        expect(stored).toMatchObject({ connectionStatus: 'CONNECTED', lastValidationStatus: 'VALID' });
+        expect(stored.lastValidatedAt.getTime()).toBe(validatedAt.getTime());
+        expect(stored.lastSuccessfulAt.getTime()).toBe(validatedAt.getTime());
+        expect(stored.pendingLogin?.expiresAt).toBeUndefined();
+        expect(serialized.connection).toMatchObject({ connectionStatus: 'CONNECTED', lastValidationStatus: 'VALID', hasConnection: true });
+    });
+
+    it('persists an authoritative reauthentication result without treating it as a connected session', async () => {
+        const provider = await createProvider();
+        await InchillProviderConnection.create({ provider: provider._id, agentPhone: '+201234567890', isPrimary: true, enabled: true, connectionStatus: 'UNKNOWN' });
+        const service = new InchillConnectionService({ client: { validateSession: jest.fn().mockResolvedValue({ data: { session: { status: 'REAUTH_REQUIRED' } } }) } });
+
+        const result = await service.validateSession(provider._id);
+        const stored = await InchillProviderConnection.findOne({ provider: provider._id });
+
+        expect(result).toMatchObject({ session: { status: 'REJECTED' }, connection: { connectionStatus: 'REAUTH_REQUIRED', lastValidationStatus: 'REJECTED' } });
+        expect(stored).toMatchObject({ connectionStatus: 'REAUTH_REQUIRED', lastValidationStatus: 'REJECTED' });
+    });
+
+    it('keeps an ambiguous validation failure conservative and never marks a connection connected or disconnected', async () => {
+        const provider = await createProvider();
+        const lastSuccessfulAt = new Date('2026-09-13T10:00:00.000Z');
+        await InchillProviderConnection.create({ provider: provider._id, agentPhone: '+201234567890', isPrimary: true, enabled: true, connectionStatus: 'UNKNOWN', lastSuccessfulAt });
+        const service = new InchillConnectionService({ client: { validateSession: jest.fn().mockRejectedValue(new InchillClientError('timeout', { code: 'INCHILL_TIMEOUT' })) } });
+
+        await expect(service.validateSession(provider._id)).rejects.toMatchObject({ code: 'INCHILL_TIMEOUT' });
+        const stored = await InchillProviderConnection.findOne({ provider: provider._id });
+
+        expect(stored).toMatchObject({ connectionStatus: 'UNKNOWN', lastValidationStatus: 'UNKNOWN' });
+        expect(stored.lastSuccessfulAt.getTime()).toBe(lastSuccessfulAt.getTime());
+    });
 });
 
 const fixture = async () => {
