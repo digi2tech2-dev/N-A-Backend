@@ -11,11 +11,13 @@ const {
     verifyFieldValidation,
     hagoNobilityReadinessValidation,
     inchillPreflightValidation,
+    inchillTargetVerificationValidation,
 } = require('./product.validation');
 const validate = require('../../shared/middlewares/validate');
 const authenticate = require('../../shared/middlewares/authenticate');
 const authorize = require('../../shared/middlewares/authorize');
 const requirePermission = require('../../shared/middlewares/requirePermission');
+const requireActiveUser = require('../../shared/middlewares/requireActiveUser');
 
 const router = Router();
 
@@ -69,6 +71,13 @@ router.post(
     authenticate,
     inchillPreflightValidation, validate,
     productController.inchillPreflight
+);
+
+router.post(
+    '/:id/inchill/verify-target',
+    authenticate, requireActiveUser,
+    inchillTargetVerificationValidation, validate,
+    productController.verifyInchillTarget
 );
 
 // ─── Admin only ───────────────────────────────────────────────────────────────

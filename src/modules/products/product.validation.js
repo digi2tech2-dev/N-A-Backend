@@ -519,6 +519,18 @@ const inchillPreflightValidation = [
     ], { locations: ['body'] }),
 ];
 
+const inchillTargetVerificationValidation = [
+    param('id').isMongoId().withMessage('Invalid product ID'),
+    checkExact([
+        body('targetId')
+            .exists({ checkNull: true }).withMessage('targetId is required')
+            .isString().withMessage('targetId must be a string')
+            .trim()
+            .notEmpty().withMessage('targetId is required')
+            .isLength({ max: 120 }).withMessage('targetId cannot exceed 120 characters'),
+    ], { locations: ['body'] }),
+];
+
 module.exports = {
     productIdParam,
     listProductsValidation,
@@ -528,4 +540,5 @@ module.exports = {
     verifyFieldValidation,
     hagoNobilityReadinessValidation,
     inchillPreflightValidation,
+    inchillTargetVerificationValidation,
 };

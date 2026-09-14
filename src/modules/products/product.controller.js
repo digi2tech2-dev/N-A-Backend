@@ -5,6 +5,7 @@ const { Product } = require('./product.model');
 const { productFieldVerificationService } = require('./productFieldVerification.service');
 const { hagoNobilityCommerceService } = require('../providers/hago/hagoNobilityCommerce.service');
 const { InchillFinancialExecutionService } = require('../providers/inchill/inchillFinancialExecution.service');
+const { inchillCustomerTargetVerificationService } = require('../providers/inchill/inchillCustomerTargetVerification.service');
 const { sendSuccess, sendCreated, sendPaginated } = require('../../shared/utils/apiResponse');
 const catchAsync = require('../../shared/utils/catchAsync');
 
@@ -48,6 +49,7 @@ const sanitizeProductForCustomer = (product) => {
         externalProductId === 'INCHILL_DIAMOND_AMOUNT'
         || obj.providerProduct?.rawPayload?.metadata?.serviceType === 'DIAMOND'
     );
+    obj.requiresInchillTargetVerification = obj.isInchillDiamond;
     for (const field of SENSITIVE_FIELDS) {
         delete obj[field];
     }
@@ -155,6 +157,20 @@ const inchillPreflight = catchAsync(async (req, res) => {
     sendSuccess(res, result, 'Inchill recharge readiness retrieved.');
 });
 
+// Read-only customer verification. Eligibility, provider relation, and the
+// active Inchill connection are derived entirely by the backend.
+const verifyInchillTarget = catchAsync(async (req, res) => {
+    const product = await Product.findById(req.params.id);
+    if (!product || product.deletedAt || product.isActive === false) {
+        return res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Product not found' });
+    }
+    const result = await inchillCustomerTargetVerificationService.verifyTarget({
+        product,
+        targetId: req.body.targetId,
+    });
+    return sendSuccess(res, result, 'Inchill target verified.');
+});
+
 // ─── Admin only ───────────────────────────────────────────────────────────────
 
 /**
@@ -204,4 +220,5 @@ module.exports = {
     verifyField,
     hagoNobilityReadiness,
     inchillPreflight,
+    verifyInchillTarget,
 };
