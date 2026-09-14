@@ -7,6 +7,7 @@ const { Provider } = require('../providers/provider.model');
 const { ProviderProduct } = require('../providers/providerProduct.model');
 const { Order, ORDER_STATUS, ORDER_EXECUTION_TYPES } = require('./order.model');
 const { debitWalletAtomic, refundWalletAtomic } = require('../wallet/wallet.service');
+const { isExactLedgerEnabled, debitExactWalletAtomic, refundExactWalletAtomic } = require('../wallet/exactLedger.service');
 const { calculateUserPrice } = require('./pricing.service');
 const { getProviderAdapter } = require('../providers/adapters/adapter.factory');
 const { validateOrderFields } = require('./orderFields.validator');
@@ -24,11 +25,12 @@ const {
     ENTITY_TYPES,
     ACTOR_ROLES,
 } = require('../audit/audit.constants');
-const { convertUsdToUserCurrency } = require('../../services/currencyConverter.service');
+const { convertUsdToUserCurrency, convertUsdDecimalToUserCurrencyExact } = require('../../services/currencyConverter.service');
 const { User } = require('../users/user.model');
 const Group = require('../groups/group.model');
 const { getLivePrice, invalidate: invalidatePriceCache } = require('../providers/providerPriceCache');
 const { toDecimal, toStr, toFiat, multiply, subtract, add, isPositive, compare } = require('../../shared/utils/decimalPrecision');
+const { decimalStringToUnits, unitsToDecimalString, compareUnits } = require('../../shared/utils/exactLedgerMoney');
 const { notifyNewManualOrder, notifyOrderCompleted, notifyOrderFailed } = require('../notifications/notification.service');
 const whatsappService = require('../whatsapp/whatsapp.service');
 const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
@@ -39,6 +41,21 @@ const TRANSACTION_UNSUPPORTED_PATTERN = /Transaction numbers are only allowed|re
 const ORDER_NUMBER_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ORDER_NUMBER_LENGTH = 8;
 const ORDER_NUMBER_MAX_ATTEMPTS = 20;
+
+const hasExactLedgerSnapshot = (order) => order?.walletDeductedUnits != null;
+
+// Deterministic integer-unit allocation for exact partial refunds. The first
+// `remainder` units are assigned one extra ledger unit; a refund for the first
+// N undelivered units is therefore stable and can never exceed the original.
+const exactRefundUnitsForRemains = (totalUnits, quantity, remains) => {
+    const total = BigInt(totalUnits);
+    const qty = BigInt(quantity);
+    const count = BigInt(remains);
+    if (count <= 0n || count >= qty) return total.toString();
+    const base = total / qty;
+    const remainder = total % qty;
+    return (base * count + (count < remainder ? count : remainder)).toString();
+};
 
 const isTransactionUnsupportedError = (err) => {
     const message = `${err?.message || ''} ${err?.errmsg || ''}`;
@@ -931,21 +948,31 @@ const _attemptCreateOrder = async (
         if (hagoNobility && String(userDoc?.currency ?? 'USD').toUpperCase() !== String(userCurrency).toUpperCase()) {
             throw new BusinessRuleError('Your currency changed after this Hago Nobility quote. Refresh the quote and try again.', 'HAGO_NOBILITY_QUOTE_MISMATCH');
         }
+        const exactLedgerEnabled = isExactLedgerEnabled();
         const conversion = hagoNobility
-            ? { finalAmount: hagoNobility.quote.finalPrice, rate: hagoNobility.quote.rateSnapshot }
-            : await convertUsdToUserCurrency(Number(toDecimal(usdTotalPrice).toNumber()), userCurrency);
-        // ── FINAL ROUNDING — only place we round to 2dp ────────────────────
-        const chargedAmount = toFiat(conversion.finalAmount);
+            ? (exactLedgerEnabled
+                ? await convertUsdDecimalToUserCurrencyExact(String(hagoNobility.quote.usdAmount), userCurrency)
+                : { finalAmount: hagoNobility.quote.finalPrice, rate: hagoNobility.quote.rateSnapshot })
+            : (exactLedgerEnabled
+                ? await convertUsdDecimalToUserCurrencyExact(String(usdTotalPrice), userCurrency)
+                : await convertUsdToUserCurrency(Number(toDecimal(usdTotalPrice).toNumber()), userCurrency));
+        // Legacy orders deliberately retain the existing 2dp financial path.
+        // Exact-ledger orders preserve the validated decimal amount as units.
+        const chargedAmountUnits = exactLedgerEnabled
+            ? decimalStringToUnits(conversion.finalAmount, { allowNegative: false, label: 'Final customer charge' })
+            : null;
+        const chargedAmountExact = exactLedgerEnabled ? unitsToDecimalString(chargedAmountUnits) : null;
+        const chargedAmount = exactLedgerEnabled ? null : toFiat(conversion.finalAmount);
         const rateSnapshot = conversion.rate;
 
         // ── 3c. FINAL PRICE GUARD ──────────────────────────────────────────────
         // Prevent NaN / Infinity / zero from reaching the wallet debit.
-        if (!Number.isFinite(chargedAmount) || chargedAmount <= 0) {
+        if ((exactLedgerEnabled && compareUnits(chargedAmountUnits, '0') <= 0)
+            || (!exactLedgerEnabled && (!Number.isFinite(chargedAmount) || chargedAmount <= 0))) {
             throw new BusinessRuleError(
                 'Invalid order price calculation. The final charged amount must be a positive number. ' +
                 `(basePrice=${pricing.basePrice}, markup=${pricing.markupPercentage}%, ` +
-                `usdTotal=${usdTotalPrice}, currency=${userCurrency}, rate=${rateSnapshot}, ` +
-                `chargedAmount=${chargedAmount})`,
+                `usdTotal=${usdTotalPrice}, currency=${userCurrency}, rate=${rateSnapshot})`,
                 'INVALID_PRICE_CALCULATION'
             );
         }
@@ -953,13 +980,32 @@ const _attemptCreateOrder = async (
         const orderId = new mongoose.Types.ObjectId();
 
         // ── 4. Atomic Debit (in user currency) ────────────────────────────────
-        const { walletDeducted, creditUsedAmount } = await debitWalletAtomic({
-            userId,
-            amount: chargedAmount,     // ← wallet always in user currency
-            reference: orderId,
-            description: `Payment for: ${product.name} x${qty}`,
-            session,
-        });
+        if (exactLedgerEnabled && !session) {
+            // Exact wallet + immutable transaction + order snapshot are a
+            // single financial unit. Unlike the legacy path, exact mode never
+            // falls back to a standalone write sequence.
+            throw new BusinessRuleError('Exact ledger checkout requires MongoDB transaction support.', 'EXACT_LEDGER_TRANSACTION_REQUIRED');
+        }
+        const financialDebit = exactLedgerEnabled
+            ? await debitExactWalletAtomic({
+                userId,
+                units: chargedAmountUnits,
+                reference: orderId,
+                sourceType: 'ORDER',
+                sourceId: orderId,
+                sourceKey: idempotencyKey ? `exact-order-debit:${userId}:${idempotencyKey}` : null,
+                description: `Payment for: ${product.name} x${qty}`,
+                session,
+            })
+            : await debitWalletAtomic({
+                userId,
+                amount: chargedAmount,     // ← wallet always in user currency
+                reference: orderId,
+                description: `Payment for: ${product.name} x${qty}`,
+                session,
+            });
+        const walletDeducted = exactLedgerEnabled ? null : financialDebit.walletDeducted;
+        const creditUsedAmount = exactLedgerEnabled ? null : financialDebit.creditUsedAmount;
 
         // ── 5. Determine initial status & execution type ───────────────────────
         // An AUTOMATIC product → PROCESSING (fulfillment attempted post-commit)
@@ -980,9 +1026,12 @@ const _attemptCreateOrder = async (
             groupIdSnapshot: pricing.groupId,
             profitUsd: profitUsd,
             unitPrice: pricing.finalPrice,
-            totalPrice: String(chargedAmount),   // legacy field — now equals chargedAmount
+            totalPrice: exactLedgerEnabled ? chargedAmountExact : String(chargedAmount),
             walletDeducted,
             creditUsedAmount,
+            chargedAmountUnits: exactLedgerEnabled ? chargedAmountUnits : null,
+            walletDeductedUnits: exactLedgerEnabled ? financialDebit.walletDeductedUnits : null,
+            creditUsedAmountUnits: exactLedgerEnabled ? financialDebit.creditUsedAmountUnits : null,
             status: initialStatus,
             executionType: product.executionType,
             customerInput,
@@ -1171,7 +1220,10 @@ const _attemptCreateOrder = async (
             );
         }
 
-        if ((err.code === 112 || err.code === 24) && !isRetry) {
+        // This is still before commit/provider execution. Retry an exact-ledger
+        // CAS miss at the outer order transaction boundary so the next attempt
+        // re-reads the initialized exact wallet state; never retry fulfillment.
+        if ((err.code === 112 || err.code === 24 || err.code === 'EXACT_LEDGER_CAS_CONFLICT') && !isRetry) {
             endSessionQuietly(session);
             await new Promise((r) => setTimeout(r, 10));
             return _attemptCreateOrder(
@@ -1220,9 +1272,10 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
     }
 
     try {
-        const order = session
-            ? await Order.findById(orderId).session(session)
-            : await Order.findById(orderId);
+        const order = await (session
+            ? Order.findById(orderId).session(session)
+            : Order.findById(orderId))
+            .select('+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits');
         if (!order) throw new NotFoundError('Order');
 
         if (new HagoFinancialExecutionService().isRefundBlocked(order)) {
@@ -1269,6 +1322,7 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
         const walletPortion = Number(order.walletDeducted || 0);
         const creditPortion = Number(order.creditUsedAmount || 0);
         const chargedPortion = Number(order.chargedAmount || 0);
+        const exactRefundUnits = hasExactLedgerSnapshot(order) ? order.walletDeductedUnits : null;
         const isLegacySplitRefund = walletPortion > 0
             && creditPortion > 0
             && chargedPortion > 0
@@ -1285,7 +1339,7 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
         // ── Quantity-Only Billing: quantity refund instead of wallet ──────
         // For quantity_only orders, all financial fields are 0. The "refund"
         // is decrementing quantityUsed so the user gets their quota back.
-        const isQuantityOnlyOrder = totalRefund <= 0 && order.quantity > 0;
+        const isQuantityOnlyOrder = !exactRefundUnits && totalRefund <= 0 && order.quantity > 0;
         const orderUserGroup = isQuantityOnlyOrder
             ? await Group.findById(
                   (await User.findById(order.userId).select('groupId').session(session || null))?.groupId
@@ -1293,7 +1347,7 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
             : null;
         const isQuantityOnlyRefund = orderUserGroup?.billingMode === 'quantity_only';
 
-        if (totalRefund <= 0 && !isQuantityOnlyRefund) {
+        if (!exactRefundUnits && totalRefund <= 0 && !isQuantityOnlyRefund) {
             throw new BusinessRuleError(
                 'Order has no charged amount to refund.',
                 'NO_REFUNDABLE_AMOUNT'
@@ -1301,6 +1355,9 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
         }
 
         // ── Update order status ──────────────────────────────────────────────
+        if (exactRefundUnits && !session) {
+            throw new BusinessRuleError('Exact ledger refunds require MongoDB transaction support.', 'EXACT_LEDGER_TRANSACTION_REQUIRED');
+        }
         order.status = ORDER_STATUS.FAILED;
         order.failedAt = new Date();
         order.refundedAt = new Date();
@@ -1317,14 +1374,27 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
             }
         } else {
             // ── Credit the wallet with the exact original amounts ────────────
-            await refundWalletAtomic({
-                userId: order.userId,
-                walletDeducted: refundWallet,
-                creditUsedAmount: refundCredit,
-                reference: order._id,
-                description: `Refund for failed order #${order.orderNumber || order._id} (${totalRefund} ${order.currency || 'USD'})`,
-                session: session || undefined,
-            });
+            if (exactRefundUnits) {
+                await refundExactWalletAtomic({
+                    userId: order.userId,
+                    units: exactRefundUnits,
+                    reference: order._id,
+                    sourceType: 'ORDER',
+                    sourceId: order._id,
+                    sourceKey: `exact-order-refund:${order._id}`,
+                    description: `Refund for failed order #${order.orderNumber || order._id}`,
+                    session,
+                });
+            } else {
+                await refundWalletAtomic({
+                    userId: order.userId,
+                    walletDeducted: refundWallet,
+                    creditUsedAmount: refundCredit,
+                    reference: order._id,
+                    description: `Refund for failed order #${order.orderNumber || order._id} (${totalRefund} ${order.currency || 'USD'})`,
+                    session: session || undefined,
+                });
+            }
         }
 
         if (session) {
@@ -1419,9 +1489,10 @@ const processOrderRefund = async (orderId, remains = 0, auditContext = null) => 
     }
 
     try {
-        const order = session
-            ? await Order.findById(orderId).session(session)
-            : await Order.findById(orderId);
+        const order = await (session
+            ? Order.findById(orderId).session(session)
+            : Order.findById(orderId))
+            .select('+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits');
         if (!order) throw new NotFoundError('Order');
 
         if (new HagoFinancialExecutionService().isRefundBlocked(order)) {
@@ -1446,10 +1517,11 @@ const processOrderRefund = async (orderId, remains = 0, auditContext = null) => 
         }
 
         // ── Calculate refund amount ──────────────────────────────────────────
+        const exactChargedUnits = hasExactLedgerSnapshot(order) ? order.walletDeductedUnits : null;
         const chargedAmount = Number(order.chargedAmount || order.walletDeducted || 0);
 
         // ── Quantity-Only Billing: quantity refund instead of wallet ──────
-        const isQuantityOnlyCandidate = chargedAmount <= 0 && order.quantity > 0;
+        const isQuantityOnlyCandidate = !exactChargedUnits && chargedAmount <= 0 && order.quantity > 0;
         const refundUserGroup = isQuantityOnlyCandidate
             ? await Group.findById(
                   (await User.findById(order.userId).select('groupId').session(session || null))?.groupId
@@ -1457,7 +1529,7 @@ const processOrderRefund = async (orderId, remains = 0, auditContext = null) => 
             : null;
         const isQuantityOnlyRefund = refundUserGroup?.billingMode === 'quantity_only';
 
-        if (chargedAmount <= 0 && !isQuantityOnlyRefund) {
+        if (!exactChargedUnits && chargedAmount <= 0 && !isQuantityOnlyRefund) {
             throw new BusinessRuleError(
                 'Order has no charged amount to refund.',
                 'NO_REFUNDABLE_AMOUNT'
@@ -1468,15 +1540,18 @@ const processOrderRefund = async (orderId, remains = 0, auditContext = null) => 
         const isPartial = remainsCount > 0 && remainsCount < order.quantity;
 
         let refundAmount;
-        if (isPartial) {
+        const refundUnits = exactChargedUnits
+            ? exactRefundUnitsForRemains(exactChargedUnits, order.quantity, isPartial ? remainsCount : order.quantity)
+            : null;
+        if (isPartial && !exactChargedUnits) {
             // Proportional refund based on undelivered quantity
             refundAmount = Math.floor((remainsCount / order.quantity) * chargedAmount);
-        } else {
+        } else if (!exactChargedUnits) {
             // Full refund
             refundAmount = chargedAmount;
         }
 
-        if (refundAmount <= 0 && !isQuantityOnlyRefund) {
+        if ((!exactChargedUnits && refundAmount <= 0) || (exactChargedUnits && compareUnits(refundUnits, '0') <= 0 && !isQuantityOnlyRefund)) {
             throw new BusinessRuleError(
                 'Calculated refund amount is zero or negative.',
                 'INVALID_REFUND_AMOUNT'
@@ -1484,6 +1559,9 @@ const processOrderRefund = async (orderId, remains = 0, auditContext = null) => 
         }
 
         // ── Update order state (before wallet, for idempotency) ──────────────
+        if (exactChargedUnits && !session) {
+            throw new BusinessRuleError('Exact ledger refunds require MongoDB transaction support.', 'EXACT_LEDGER_TRANSACTION_REQUIRED');
+        }
         order.refunded = true;
         order.refundedAt = new Date();
         if (isPartial) {
@@ -1506,14 +1584,27 @@ const processOrderRefund = async (orderId, remains = 0, auditContext = null) => 
                 ? `Partial refund for Order #${order.orderNumber} (Remains: ${remainsCount}/${order.quantity})`
                 : `Full refund for Order #${order.orderNumber}`;
 
-            await refundWalletAtomic({
-                userId: order.userId,
-                walletDeducted: refundAmount,
-                creditUsedAmount: 0,
-                reference: order._id,
-                description,
-                session: session || undefined,
-            });
+            if (exactChargedUnits) {
+                await refundExactWalletAtomic({
+                    userId: order.userId,
+                    units: refundUnits,
+                    reference: order._id,
+                    sourceType: 'ORDER',
+                    sourceId: order._id,
+                    sourceKey: `exact-order-refund:${order._id}`,
+                    description,
+                    session,
+                });
+            } else {
+                await refundWalletAtomic({
+                    userId: order.userId,
+                    walletDeducted: refundAmount,
+                    creditUsedAmount: 0,
+                    reference: order._id,
+                    description,
+                    session: session || undefined,
+                });
+            }
         }
 
         if (session) {
@@ -1653,6 +1744,7 @@ const getOrderById = async (orderId, userId = null) => {
     if (userId) filter.userId = userId;
 
     const order = await Order.findOne(filter)
+        .select('+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits')
         .populate('productId', 'name basePrice minQty maxQty executionType')
         .populate('userId', 'name email');
 

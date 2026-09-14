@@ -154,14 +154,17 @@ const orderSchema = new mongoose.Schema(
 
         walletDeducted: {
             type: Number,
-            required: true,
+            // Exact-ledger orders keep their authoritative debit in
+            // walletDeductedUnits; legacy records retain this required cents
+            // field and its existing default.
+            required() { return this.walletDeductedUnits == null; },
             default: 0,
             min: [0, 'Wallet deducted cannot be negative'],
         },
 
         creditUsedAmount: {
             type: String,
-            required: true,
+            required() { return this.creditUsedAmountUnits == null; },
             default: '0',
             get: (v) => String(v ?? '0'),
             set: (v) => String(v ?? '0'),

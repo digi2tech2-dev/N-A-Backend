@@ -23,6 +23,7 @@ const mongoose = require('mongoose');
 const { Order, ORDER_STATUS, MAX_RETRY_COUNT, ORDER_EXECUTION_TYPES } = require('../orders/order.model');
 const { getExternalProductId } = require('../products/product.service');
 const { refundWalletAtomic } = require('../wallet/wallet.service');
+const { refundExactWalletAtomic } = require('../wallet/exactLedger.service');
 const { User } = require('../users/user.model');
 const Group = require('../groups/group.model');
 const { createAuditLog } = require('../audit/audit.service');
@@ -36,6 +37,51 @@ const {
 } = require('../audit/audit.constants');
 const { toInternalStatus, isTerminal, requiresRefund } = require('../providers/statusMapper');
 const { notifyOrderCompleted, notifyOrderFailed } = require('../notifications/notification.service');
+
+const hasExactLedgerSnapshot = (order) => order?.walletDeductedUnits != null;
+
+// Exact orders are refunded in a transaction that includes the refunded CAS
+// marker and the exact wallet transaction. This path is selected solely by an
+// already-persisted order snapshot; it never changes provider execution.
+const refundExactFailedOrder = async (order) => {
+    const session = await mongoose.startSession();
+    try {
+        session.startTransaction({ readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+        const current = await Order.findById(order._id)
+            .select('+walletDeductedUnits +chargedAmountUnits +creditUsedAmountUnits')
+            .session(session);
+        if (!current?.walletDeductedUnits || current.refunded === true) {
+            await session.abortTransaction();
+            return false;
+        }
+        const claimed = await Order.findOneAndUpdate(
+            { _id: current._id, refunded: false },
+            { $set: { refunded: true, refundedAt: new Date() } },
+            { new: true, session }
+        );
+        if (!claimed) {
+            await session.abortTransaction();
+            return false;
+        }
+        await refundExactWalletAtomic({
+            userId: current.userId,
+            units: current.walletDeductedUnits,
+            reference: current._id,
+            sourceType: 'ORDER',
+            sourceId: current._id,
+            sourceKey: `exact-order-refund:${current._id}`,
+            description: `Auto-refund: provider order ${current.providerOrderId ?? 'N/A'} failed`,
+            session,
+        });
+        await session.commitTransaction();
+        return true;
+    } catch (error) {
+        if (session.inTransaction()) await session.abortTransaction();
+        throw error;
+    } finally {
+        await session.endSession();
+    }
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // IDEMPOTENT REFUND
@@ -55,6 +101,15 @@ const { notifyOrderCompleted, notifyOrderFailed } = require('../notifications/no
  * @returns {Promise<boolean>} true if refund was applied, false if already refunded
  */
 const refundFailedOrder = async (order) => {
+    if (hasExactLedgerSnapshot(order)) return refundExactFailedOrder(order);
+    // Legacy orders retain their existing refund query path. Exact orders have
+    // null legacy debit snapshots, so only that unambiguous shape needs the
+    // additional exact-field lookup (including when the rollout gate is later
+    // disabled and an already-exact order still requires a correct refund).
+    if (order?._id && order.walletDeducted == null && order.chargedAmount == null) {
+        const exactSnapshot = await Order.findById(order._id).select('+walletDeductedUnits');
+        if (hasExactLedgerSnapshot(exactSnapshot)) return refundExactFailedOrder(exactSnapshot);
+    }
     // Compare-and-swap: only proceeds when refunded===false
     const swapped = await Order.findOneAndUpdate(
         { _id: order._id, refunded: false },

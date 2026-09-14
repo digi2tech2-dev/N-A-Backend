@@ -53,7 +53,9 @@ const walletTransactionSchema = new mongoose.Schema(
 
         amount: {
             type: Number,
-            required: [true, 'Amount is required'],
+            // Legacy transactions require the cents Number. Exact-ledger
+            // transactions persist their authoritative amount in amountUnits.
+            required() { return this.amountUnits == null; },
             min: [0.01, 'Amount must be greater than 0'],
         },
 
@@ -69,7 +71,7 @@ const walletTransactionSchema = new mongoose.Schema(
 
         balanceBefore: {
             type: Number,
-            required: [true, 'Balance before is required'],
+            required() { return this.balanceBeforeUnits == null; },
         },
 
         balanceBeforeUnits: {
@@ -82,7 +84,7 @@ const walletTransactionSchema = new mongoose.Schema(
 
         balanceAfter: {
             type: Number,
-            required: [true, 'Balance after is required'],
+            required() { return this.balanceAfterUnits == null; },
         },
 
         balanceAfterUnits: {

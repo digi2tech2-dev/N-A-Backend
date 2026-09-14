@@ -129,6 +129,20 @@ describe('Hago financial execution safety', () => {
         expect(String(provider._id)).toBeTruthy();
     });
 
+    it('keeps the controlled Hago payload unchanged when exact customer accounting is enabled', async () => {
+        process.env.EXACT_LEDGER_ENABLED = 'true';
+        try {
+            const { order } = await createHagoOrderFixture();
+            const adapter = { executeControlledRecharge: jest.fn().mockResolvedValue({ statusCode: 200, data: { status: 'SUCCESS', transaction: { id: 'txn_exact', status: 'SUCCESS', upstreamStatus: 'SUCCESS' } } }) };
+            await new HagoFinancialExecutionService({ adapterFactory: () => adapter, refundFailedOrder: jest.fn() }).execute(order._id);
+            expect(adapter.executeControlledRecharge).toHaveBeenCalledWith(expect.objectContaining({
+                serviceType: 'DIAMOND', amount: 7, targetId: '51511', idempotencyKey: expect.stringMatching(/^hago:diamond:/),
+            }));
+        } finally {
+            delete process.env.EXACT_LEDGER_ENABLED;
+        }
+    });
+
     it.each(['DIAMOND', 'CRYSTAL'])('%s authoritative failure refunds exactly once', async (serviceType) => {
         const { order } = await createHagoOrderFixture({ serviceType });
         const refund = jest.fn().mockResolvedValue(true);

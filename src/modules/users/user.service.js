@@ -4,6 +4,8 @@ const { User, ROLES, USER_STATUS } = require('./user.model');
 const Group = require('../groups/group.model');
 const { Currency } = require('../currency/currency.model');
 const { recalculateCreditUsed } = require('../wallet/wallet.service');
+const { isExactLedgerEnabled, updateExactCreditLimitAtomic } = require('../wallet/exactLedger.service');
+const { legacyMoneyToUnits } = require('../../shared/utils/exactLedgerMoney');
 const { AppError, NotFoundError, ConflictError, BusinessRuleError } = require('../../shared/errors/AppError');
 const { createAuditLog } = require('../audit/audit.service');
 const { USER_ACTIONS, ENTITY_TYPES, ACTOR_ROLES } = require('../audit/audit.constants');
@@ -215,10 +217,19 @@ const updateUser = async (id, { groupId, creditLimit, name, quantityLimit }) => 
         user.groupId = groupId;
     }
 
+    let exactCreditLimitUpdated = false;
     if (creditLimit !== undefined) {
         if (creditLimit < 0) throw new BusinessRuleError('Credit limit cannot be negative.', 'INVALID_CREDIT_LIMIT');
-        user.creditLimit = creditLimit;
-        user.creditUsed = recalculateCreditUsed(user.walletBalance, user.creditLimit);
+        if (isExactLedgerEnabled()) {
+            await updateExactCreditLimitAtomic({
+                userId: user._id,
+                targetCreditLimitUnits: legacyMoneyToUnits(creditLimit, { label: 'Credit limit' }),
+            });
+            exactCreditLimitUpdated = true;
+        } else {
+            user.creditLimit = creditLimit;
+            user.creditUsed = recalculateCreditUsed(user.walletBalance, user.creditLimit);
+        }
     }
 
     if (quantityLimit !== undefined) {
@@ -229,6 +240,7 @@ const updateUser = async (id, { groupId, creditLimit, name, quantityLimit }) => 
     if (name !== undefined) user.name = name;
 
     await user.save();
+    if (exactCreditLimitUpdated) return (await User.findById(id)).toSafeObject();
     return user.toSafeObject();
 };
 

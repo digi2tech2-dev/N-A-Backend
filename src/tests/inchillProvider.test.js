@@ -342,6 +342,18 @@ describe('Inchill financial execution safety', () => {
         expect(stored.inchillFinancial.providerMutationKey).toMatch(/^inchill:/);
     });
 
+    it('keeps the controlled Inchill payload unchanged when exact customer accounting is enabled', async () => {
+        process.env.EXACT_LEDGER_ENABLED = 'true';
+        try {
+            const { order } = await fixture();
+            const rechargeDiamond = jest.fn().mockResolvedValue({ data: { transaction: { id: 'tx_exact', status: 'SUCCESS', upstreamStatus: 'SUCCESS' } } });
+            await new InchillFinancialExecutionService({ client: readyClient(rechargeDiamond), refundFailedOrder: jest.fn() }).execute(order._id);
+            expect(rechargeDiamond).toHaveBeenCalledWith('+201234567890', '51511', 7, expect.stringMatching(/^inchill:/));
+        } finally {
+            delete process.env.EXACT_LEDGER_ENABLED;
+        }
+    });
+
     it('does not send a recharge when the explicit Inchill feature gate is disabled', async () => {
         const { order } = await fixture();
         const rechargeDiamond = jest.fn();

@@ -12,6 +12,8 @@
 
 const { User, USER_STATUS, ROLES } = require('../users/user.model');
 const { recalculateCreditUsed } = require('../wallet/wallet.service');
+const { isExactLedgerEnabled, updateExactCreditLimitAtomic } = require('../wallet/exactLedger.service');
+const { legacyMoneyToUnits } = require('../../shared/utils/exactLedgerMoney');
 const { NotFoundError, ConflictError, BusinessRuleError } = require('../../shared/errors/AppError');
 const { createAuditLog } = require('../audit/audit.service');
 const {
@@ -315,6 +317,9 @@ const updateUserCurrency = async (id, currency, adminId) => {
 
     // Same currency → no-op
     if (user.currency === code) return user;
+    if (isExactLedgerEnabled()) {
+        throw new BusinessRuleError('Currency changes are unavailable while the exact ledger rollout is enabled.', 'EXACT_LEDGER_CURRENCY_CHANGE_UNSUPPORTED');
+    }
 
     // Validate new currency exists and is active
     const { Currency } = require('../currency/currency.model');
@@ -425,9 +430,17 @@ const updateUserCreditLimit = async (id, creditLimit, adminId) => {
     const user = await _findOrFail(id);
 
     const previousCreditLimit = user.creditLimit || 0;
-    user.creditLimit = Math.max(0, Number(creditLimit) || 0);
-    user.creditUsed = recalculateCreditUsed(user.walletBalance, user.creditLimit);
-    await user.save();
+    const nextCreditLimit = Math.max(0, Number(creditLimit) || 0);
+    if (isExactLedgerEnabled()) {
+        await updateExactCreditLimitAtomic({
+            userId: user._id,
+            targetCreditLimitUnits: legacyMoneyToUnits(nextCreditLimit, { label: 'Credit limit' }),
+        });
+    } else {
+        user.creditLimit = nextCreditLimit;
+        user.creditUsed = recalculateCreditUsed(user.walletBalance, user.creditLimit);
+        await user.save();
+    }
 
     createAuditLog({
         actorId: adminId,
@@ -435,10 +448,10 @@ const updateUserCreditLimit = async (id, creditLimit, adminId) => {
         action: ADMIN_ACTIONS.USER_UPDATED,
         entityType: ENTITY_TYPES.USER,
         entityId: user._id,
-        metadata: { field: 'creditLimit', previousCreditLimit, newCreditLimit: user.creditLimit },
+        metadata: { field: 'creditLimit', previousCreditLimit, newCreditLimit: nextCreditLimit },
     });
 
-    return user;
+    return isExactLedgerEnabled() ? _findOrFail(id) : user;
 };
 
 // ─── Update Permissions ───────────────────────────────────────────────────────

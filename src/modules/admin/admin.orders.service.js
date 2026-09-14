@@ -10,6 +10,7 @@ const mongoose = require('mongoose');
 const { Order, ORDER_STATUS } = require('../orders/order.model');
 const { markOrderAsFailed, processOrderRefund } = require('../orders/order.service');
 const { forcedDebitWallet } = require('../wallet/wallet.service');
+const { debitExactWalletAtomic } = require('../wallet/exactLedger.service');
 const { getProviderAdapter } = require('../providers/adapters/adapter.factory');
 const { Provider } = require('../providers/provider.model');
 const { NotFoundError, BusinessRuleError } = require('../../shared/errors/AppError');
@@ -415,7 +416,7 @@ const syncOrderProviderStatus = async (orderId, adminId, auditContext = null) =>
  */
 const completeOrder = async (orderId, adminId, auditContext = null) => {
     const ctx = resolveAuditContext(adminId, auditContext);
-    const order = await Order.findById(orderId);
+    const order = await Order.findById(orderId).select('+walletDeductedUnits');
     if (!order) throw new NotFoundError('Order');
 
     assertHagoFinancialNotUnresolved(order, 'completion');
@@ -442,7 +443,20 @@ const completeOrder = async (orderId, adminId, auditContext = null) => {
         //   Fall back to walletDeducted for legacy orders.
         const reDeductAmount = Number(order.chargedAmount || order.walletDeducted || 0);
 
-        if (reDeductAmount > 0) {
+        if (order.walletDeductedUnits != null) {
+            await debitExactWalletAtomic({
+                userId: order.userId,
+                units: order.walletDeductedUnits,
+                reference: order._id,
+                sourceType: 'ORDER',
+                sourceId: order._id,
+                sourceKey: `exact-order-rededuction:${order._id}`,
+                description: `Admin forced completion re-deduction for order #${order.orderNumber || order._id}`,
+                requireActive: false,
+                enforceAvailableFunds: false,
+                requireFeatureGate: false,
+            });
+        } else if (reDeductAmount > 0) {
             await forcedDebitWallet({
                 userId: order.userId,
                 amount: reDeductAmount,

@@ -3,6 +3,13 @@
 const { User, USER_STATUS } = require('../users/user.model');
 const { WalletTransaction, TRANSACTION_TYPES } = require('./walletTransaction.model');
 const { NotFoundError, BusinessRuleError, InsufficientFundsError } = require('../../shared/errors/AppError');
+const { legacyMoneyToUnits } = require('../../shared/utils/exactLedgerMoney');
+const {
+    isExactLedgerEnabled,
+    debitExactWalletAtomic,
+    creditExactWalletAtomic,
+    refundExactWalletAtomic,
+} = require('./exactLedger.service');
 
 const runTestHook = async (hook, payload) => {
     if (!hook) return;
@@ -119,6 +126,15 @@ const _createTransactionRecord = async ({
  * @returns {{ walletDeducted: number, creditUsedAmount: number, transaction: WalletTransaction }}
  */
 const debitWalletAtomic = async ({ userId, amount, reference = null, description = '', session }) => {
+    if (isExactLedgerEnabled()) {
+        return debitExactWalletAtomic({
+            userId,
+            units: legacyMoneyToUnits(amount, { label: 'Legacy debit amount' }),
+            reference,
+            description,
+            session,
+        });
+    }
     if (amount <= 0) {
         throw new BusinessRuleError('Debit amount must be greater than zero.', 'INVALID_AMOUNT');
     }
@@ -206,6 +222,17 @@ const debitWalletAtomic = async ({ userId, amount, reference = null, description
  * @returns {{ transaction: WalletTransaction }}
  */
 const forcedDebitWallet = async ({ userId, amount, reference = null, description = '', session }) => {
+    if (isExactLedgerEnabled()) {
+        return debitExactWalletAtomic({
+            userId,
+            units: legacyMoneyToUnits(amount, { label: 'Forced debit amount' }),
+            reference,
+            description,
+            session,
+            requireActive: false,
+            enforceAvailableFunds: false,
+        });
+    }
     if (amount <= 0) {
         throw new BusinessRuleError('Debit amount must be greater than zero.', 'INVALID_AMOUNT');
     }
@@ -261,6 +288,17 @@ const refundWalletAtomic = async ({
     description = '',
     session,
 }) => {
+    if (isExactLedgerEnabled()) {
+        const refundAmount = safeRound(Number(walletDeducted || 0));
+        const creditOnly = refundAmount > 0 ? 0 : safeRound(Number(creditUsedAmount || 0));
+        return refundExactWalletAtomic({
+            userId,
+            units: legacyMoneyToUnits(safeRound(refundAmount + creditOnly), { label: 'Legacy refund amount' }),
+            reference,
+            description,
+            session,
+        });
+    }
     const refundAmount = safeRound(Number(walletDeducted || 0));
     const legacyCreditOnlyRefund = refundAmount > 0 ? 0 : safeRound(Number(creditUsedAmount || 0));
     const totalRefund = safeRound(refundAmount + legacyCreditOnlyRefund);
@@ -324,6 +362,18 @@ const creditWalletDirect = async ({
     session,
     testHooks = {},
 }) => {
+    if (isExactLedgerEnabled()) {
+        return creditExactWalletAtomic({
+            userId,
+            units: legacyMoneyToUnits(amount, { label: 'Legacy credit amount' }),
+            reference,
+            sourceType,
+            sourceId,
+            sourceKey,
+            description,
+            session,
+        });
+    }
     if (amount <= 0) {
         throw new BusinessRuleError('Credit amount must be greater than zero.', 'INVALID_AMOUNT');
     }

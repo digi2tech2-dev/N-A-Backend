@@ -20,6 +20,12 @@
 
 const { Currency } = require('../modules/currency/currency.model');
 const { NotFoundError, BusinessRuleError } = require('../shared/errors/AppError');
+const Decimal = require('decimal.js');
+const {
+    normalizeDecimalString,
+    normalizePlatformRateExact,
+    legacyPlatformRateToExact,
+} = require('../shared/utils/exactLedgerMoney');
 
 // ─── Internal cache ───────────────────────────────────────────────────────────
 // Very lightweight in-process cache with 60 s TTL.
@@ -124,6 +130,48 @@ const convertUsdToUserCurrency = async (usdAmount, userCurrency) => {
     };
 };
 
+/**
+ * Exact customer-ledger conversion.  This is deliberately separate from the
+ * legacy Number converter above: callers opt in behind EXACT_LEDGER_ENABLED.
+ * Provider pricing/payloads continue to use their existing contracts.
+ */
+const convertUsdDecimalToUserCurrencyExact = async (usdAmount, userCurrency) => {
+    const normalizedUsd = normalizeDecimalString(usdAmount, {
+        allowNegative: false,
+        maxFractionDigits: 50,
+        maxWholeDigits: 69,
+        label: 'USD amount',
+    });
+    const upper = String(userCurrency || 'USD').trim().toUpperCase();
+    if (upper === 'USD') {
+        return { usdAmount: normalizedUsd, currency: 'USD', rate: 1, rateExact: '1', finalAmount: normalizedUsd };
+    }
+    const currency = await Currency.findOne({ code: upper })
+        .select('code isActive platformRate +platformRateExact');
+    if (!currency) throw new NotFoundError(`Currency '${upper}'`);
+    if (!currency.isActive) throw new BusinessRuleError(`Currency '${upper}' is currently inactive.`, 'CURRENCY_INACTIVE');
+    const rateExact = currency.platformRateExact
+        ? normalizePlatformRateExact(currency.platformRateExact)
+        : legacyPlatformRateToExact(currency.platformRate);
+
+    // The compatibility contract bounds USD at 50 fractional digits and the
+    // rate at six, so multiplication has at most 56 fractional digits. A
+    // local high-precision clone prevents the global display helper's 50dp
+    // policy from truncating the customer ledger amount.
+    const ExactDecimal = Decimal.clone({ precision: 190, rounding: Decimal.ROUND_HALF_UP, toExpNeg: -1000, toExpPos: 1000 });
+    const result = new ExactDecimal(normalizedUsd).times(new ExactDecimal(rateExact));
+    if (!result.isFinite() || result.lte(0)) {
+        throw new BusinessRuleError('The converted customer charge must be positive.', 'INVALID_PRICE_CALCULATION');
+    }
+    const finalAmount = normalizeDecimalString(result.toFixed(), {
+        allowNegative: false,
+        maxFractionDigits: 56,
+        maxWholeDigits: 129,
+        label: 'Converted customer amount',
+    });
+    return { usdAmount: normalizedUsd, currency: currency.code, rate: currency.platformRate, rateExact, finalAmount };
+};
+
 // =============================================================================
 // convertUserCurrencyToUsd
 // =============================================================================
@@ -185,6 +233,7 @@ const getConversionRate = async (currencyCode) => {
 
 module.exports = {
     convertUsdToUserCurrency,
+    convertUsdDecimalToUserCurrencyExact,
     convertUserCurrencyToUsd,
     getConversionRate,
     invalidateCurrencyCache,

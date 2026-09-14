@@ -12,6 +12,13 @@
 const { User } = require('../users/user.model');
 const { WalletTransaction, TRANSACTION_TYPES } = require('../wallet/walletTransaction.model');
 const { recalculateCreditUsed } = require('../wallet/wallet.service');
+const {
+    isExactLedgerEnabled,
+    debitExactWalletAtomic,
+    creditExactWalletAtomic,
+    setExactWalletBalanceAtomic,
+} = require('../wallet/exactLedger.service');
+const { legacyMoneyToUnits } = require('../../shared/utils/exactLedgerMoney');
 const { NotFoundError, BusinessRuleError } = require('../../shared/errors/AppError');
 const { createAuditLog } = require('../audit/audit.service');
 const { ADMIN_ACTIONS, ENTITY_TYPES, ACTOR_ROLES } = require('../audit/audit.constants');
@@ -123,6 +130,20 @@ const addFunds = async (userId, amount, reason, adminId) => {
     const user = await User.findById(userId);
     if (!user) throw new NotFoundError('User');
 
+    if (isExactLedgerEnabled()) {
+        const result = await creditExactWalletAtomic({
+            userId,
+            units: legacyMoneyToUnits(parsedAmount, { label: 'Admin credit amount' }),
+            description: reason || `Admin manual credit (${user.currency || 'USD'})`,
+        });
+        createAuditLog({
+            actorId: adminId, actorRole: ACTOR_ROLES.ADMIN, action: ADMIN_ACTIONS.WALLET_ADJUSTED,
+            entityType: ENTITY_TYPES.WALLET, entityId: userId,
+            metadata: { type: 'ADD', amount: parsedAmount, currency: user.currency || 'USD', reason, userId, transactionId: result.transaction?._id },
+        });
+        return { transaction: result.transaction };
+    }
+
     const userCurrency = user.currency || 'USD';
     const balanceBefore = safeRound(user.walletBalance || 0);
     const balanceAfter = safeRound(balanceBefore + parsedAmount);
@@ -197,6 +218,21 @@ const deductFunds = async (userId, amount, reason, adminId) => {
     // Fetch user to check credit limit
     const user = await User.findById(userId);
     if (!user) throw new NotFoundError('User');
+
+    if (isExactLedgerEnabled()) {
+        const result = await debitExactWalletAtomic({
+            userId,
+            units: legacyMoneyToUnits(parsedAmount, { label: 'Admin debit amount' }),
+            description: reason || `Admin manual debit (${user.currency || 'USD'})`,
+            requireActive: false,
+        });
+        createAuditLog({
+            actorId: adminId, actorRole: ACTOR_ROLES.ADMIN, action: ADMIN_ACTIONS.WALLET_ADJUSTED,
+            entityType: ENTITY_TYPES.WALLET, entityId: userId,
+            metadata: { type: 'DEDUCT', amount: parsedAmount, currency: user.currency || 'USD', reason, userId, transactionId: result.transaction?._id },
+        });
+        return { transaction: result.transaction };
+    }
 
     const userCurrency = user.currency || 'USD';
     const balanceBefore = safeRound(user.walletBalance || 0);
@@ -288,6 +324,20 @@ const setBalance = async (userId, targetBalance, reason, adminId) => {
     const user = await User.findById(userId);
     if (!user) throw new NotFoundError('User');
 
+    if (isExactLedgerEnabled()) {
+        const result = await setExactWalletBalanceAtomic({
+            userId,
+            targetBalanceUnits: legacyMoneyToUnits(newBalance, { label: 'Admin target balance' }),
+            description: reason || `Admin set balance to ${newBalance} (${user.currency || 'USD'})`,
+        });
+        createAuditLog({
+            actorId: adminId, actorRole: ACTOR_ROLES.ADMIN, action: ADMIN_ACTIONS.WALLET_ADJUSTED,
+            entityType: ENTITY_TYPES.WALLET, entityId: userId,
+            metadata: { type: 'SET', targetBalance: newBalance, currency: user.currency || 'USD', reason, userId, transactionId: result.transaction?._id },
+        });
+        return { transaction: result.transaction, user: user.toSafeObject ? user.toSafeObject() : user.toObject() };
+    }
+
     const userCurrency = user.currency || 'USD';
     const balanceBefore = safeRound(user.walletBalance || 0);
     const creditUsedAfter = recalculateCreditUsed(newBalance, user.creditLimit);
@@ -371,6 +421,9 @@ const adjustNegativeBalancesForInflation = async (percentageIncrease, adminId, c
             'Percentage must be between 0.01 and 100.',
             'INVALID_PERCENTAGE'
         );
+    }
+    if (isExactLedgerEnabled()) {
+        throw new BusinessRuleError('Bulk debt adjustments are unavailable while the exact ledger rollout is enabled.', 'EXACT_LEDGER_BULK_ADJUSTMENT_UNSUPPORTED');
     }
 
     const multiplier = percentageIncrease / 100;
@@ -473,6 +526,9 @@ const adjustNegativeBalancesForDeflation = async (percentageDecrease, adminId, c
             'Percentage must be between 0.01 and 100.',
             'INVALID_PERCENTAGE'
         );
+    }
+    if (isExactLedgerEnabled()) {
+        throw new BusinessRuleError('Bulk debt adjustments are unavailable while the exact ledger rollout is enabled.', 'EXACT_LEDGER_BULK_ADJUSTMENT_UNSUPPORTED');
     }
 
     const multiplier = percentageDecrease / 100;
