@@ -2,13 +2,16 @@
 
 const { InchillClient, InchillClientError } = require('../modules/providers/inchill/inchill.client');
 const { Provider } = require('../modules/providers/provider.model');
+const { ProviderProduct } = require('../modules/providers/providerProduct.model');
+const { Product } = require('../modules/products/product.model');
 const { Order, ORDER_STATUS } = require('../modules/orders/order.model');
 const { InchillProviderConnection } = require('../modules/providers/inchill/inchillProviderConnection.model');
 const { InchillFinancialExecutionService } = require('../modules/providers/inchill/inchillFinancialExecution.service');
 const { InchillConnectionService } = require('../modules/providers/inchill/inchillConnection.service');
+const { createOrder } = require('../modules/orders/order.service');
 const { inchillPreflightValidation } = require('../modules/products/product.validation');
 const validate = require('../shared/middlewares/validate');
-const { connectTestDB, disconnectTestDB, clearCollections } = require('./testHelpers');
+const { connectTestDB, disconnectTestDB, clearCollections, createCustomerWithGroup, freshUser } = require('./testHelpers');
 
 const makeHttpClient = () => ({ post: jest.fn() });
 
@@ -260,6 +263,62 @@ const fixture = async () => {
     });
     return { provider, connection, order };
 };
+
+const publishedDiamondFixture = async () => {
+    const provider = await Provider.create({ name: `Inchill Published ${Date.now()}-${Math.random()}`, slug: 'inchill', baseUrl: 'https://provider-record.example.invalid', isActive: true, syncInterval: 0 });
+    const providerProduct = await ProviderProduct.create({ provider: provider._id, externalProductId: 'INCHILL_DIAMOND_AMOUNT', rawName: 'Inchill Diamond', rawPrice: '0.0000146116138799', minQty: 1, maxQty: 999999999, isActive: true, rawPayload: { metadata: { serviceType: 'DIAMOND' } } });
+    const product = await Product.create({ name: `Inchill Diamond ${Date.now()}-${Math.random()}`, basePrice: '0.0000146116138799', minQty: 1, maxQty: 999999999, isActive: true, executionType: 'automatic', pricingMode: 'manual', provider: provider._id, providerProduct: providerProduct._id, orderFields: [{ id: 'target', key: 'player_id', label: 'Player ID', type: 'text', required: true }] });
+    return { provider, providerProduct, product };
+};
+
+describe('Inchill customer checkout contract', () => {
+    it('accepts the published player_id target field and an authoritative CONNECTED preflight without a mutation', async () => {
+        const { provider, product } = await publishedDiamondFixture();
+        await InchillProviderConnection.create({ provider: provider._id, agentPhone: '+201234567890', isPrimary: true, enabled: true });
+        const rechargeDiamond = jest.fn();
+        const client = {
+            validateSession: jest.fn().mockResolvedValue({ data: { session: { status: 'CONNECTED' } } }),
+            verifyTarget: jest.fn().mockResolvedValue({ data: { userInfo: { vid: '376756346' } } }),
+            rechargePreflight: jest.fn().mockResolvedValue({ data: { preflight: { readOnly: true, mutationAttempted: false, session: 'CONNECTED', targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '376756346' }, amount: 10 } } }),
+            rechargeDiamond,
+        };
+
+        const prepared = await new InchillFinancialExecutionService({ client }).prepareNewOrder({
+            product,
+            quantity: 10,
+            customerInput: { values: { player_id: '376756346' } },
+        });
+
+        expect(prepared).toMatchObject({ targetId: '376756346', providerAmount: 10 });
+        expect(client.verifyTarget).toHaveBeenCalledWith('+201234567890', '376756346');
+        expect(rechargeDiamond).not.toHaveBeenCalled();
+    });
+
+    it('rejects disabled checkout before wallet debit, order creation, or provider mutation', async () => {
+        const { product } = await publishedDiamondFixture();
+        const { customer } = await createCustomerWithGroup({ walletBalance: 25 });
+        const balanceBefore = (await freshUser(customer._id)).walletBalance;
+        delete process.env.INCHILL_DIAMOND_FULFILLMENT_ENABLED;
+
+        try {
+            await expect(createOrder({
+                userId: customer._id,
+                productId: product._id,
+                quantity: 10,
+                orderFieldsValues: { player_id: '376756346' },
+            })).rejects.toMatchObject({
+                statusCode: 422,
+                code: 'INCHILL_FINANCIAL_CHECKOUT_NOT_ENABLED',
+            });
+        } finally {
+            process.env.INCHILL_DIAMOND_FULFILLMENT_ENABLED = 'true';
+        }
+
+        const customerAfter = await freshUser(customer._id);
+        expect(customerAfter.walletBalance).toBe(balanceBefore);
+        await expect(Order.countDocuments({ userId: customer._id, productId: product._id })).resolves.toBe(0);
+    });
+});
 
 describe('Inchill financial execution safety', () => {
     const readyClient = (rechargeDiamond) => ({

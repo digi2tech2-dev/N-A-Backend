@@ -9,7 +9,7 @@ const { InchillClient, InchillClientError } = require('./inchill.client');
 const { BusinessRuleError } = require('../../../shared/errors/AppError');
 
 const STATES = Object.freeze({ READY: 'READY', CLAIMED: 'CLAIMED', SENT: 'SENT', SUCCESS: 'SUCCESS', FAILED: 'FAILED', PENDING: 'PENDING', UNKNOWN: 'UNKNOWN' });
-const TARGET_KEYS = new Set(['targetid', 'target_id', 'vid', 'inchillid', 'inchill_id', 'playerid', 'player_id', 'target']);
+const TARGET_KEYS = new Set(['targetid', 'target_id', 'vid', 'inchillid', 'inchill_id', 'playerid', 'player_id', 'userid', 'user_id', 'uid', 'target']);
 const isInchillDiamondEnabled = (env = process.env) => env.INCHILL_DIAMOND_FULFILLMENT_ENABLED === 'true';
 const isInchillDiamond = (provider, product) => provider?.slug === 'inchill' && (String(product?.externalProductId) === 'INCHILL_DIAMOND_AMOUNT' || product?.rawPayload?.metadata?.serviceType === 'DIAMOND');
 const trustedTarget = (values = {}, mapping = {}) => {
@@ -27,13 +27,13 @@ class InchillFinancialExecutionService {
         if (!connection?.agentPhone) throw new BusinessRuleError('No enabled Inchill connection is available.', 'INCHILL_CONNECTION_REQUIRED');
         const validation = await this.client.validateSession(connection.agentPhone);
         const session = String(validation.data?.session?.status ?? 'UNKNOWN').toUpperCase();
-        if (session === 'REJECTED') throw new BusinessRuleError('The Inchill connection requires reauthentication.', 'INCHILL_REAUTHENTICATION_REQUIRED');
-        if (session !== 'VALID') throw new BusinessRuleError('The Inchill session is not safe for a recharge.', 'INCHILL_SESSION_UNKNOWN');
+        if (['REJECTED', 'REAUTH_REQUIRED'].includes(session)) throw new BusinessRuleError('The Inchill connection requires reauthentication.', 'INCHILL_REAUTHENTICATION_REQUIRED');
+        if (!['VALID', 'CONNECTED'].includes(session)) throw new BusinessRuleError('The Inchill session is not safe for a recharge.', 'INCHILL_SESSION_UNKNOWN');
         const identity = await this.client.verifyTarget(connection.agentPhone, targetId);
         if (!identity.data?.userInfo?.vid && !identity.data?.userInfo?.nick) throw new BusinessRuleError('The Inchill ID is invalid or unavailable.', 'INCHILL_TARGET_INVALID');
         const checked = await this.client.rechargePreflight(connection.agentPhone, targetId, amount);
         const preflight = checked.data?.preflight;
-        if (!preflight || preflight.readOnly !== true || preflight.mutationAttempted !== false || preflight.session !== 'VALID' || preflight.targetResolved !== true || preflight.serviceType !== 'DIAMOND' || preflight.walletSufficient !== true || String(preflight.target?.vid) !== String(targetId) || Number(preflight.amount) !== Number(amount)) {
+        if (!preflight || preflight.readOnly !== true || preflight.mutationAttempted !== false || !['VALID', 'CONNECTED'].includes(String(preflight.session ?? '').toUpperCase()) || preflight.targetResolved !== true || preflight.serviceType !== 'DIAMOND' || preflight.walletSufficient !== true || String(preflight.target?.vid) !== String(targetId) || Number(preflight.amount) !== Number(amount)) {
             if (preflight?.walletSufficient === false) throw new BusinessRuleError('The Inchill provider balance is unavailable.', 'INCHILL_INSUFFICIENT_PROVIDER_BALANCE');
             throw new BusinessRuleError('Inchill recharge preflight failed.', 'INCHILL_PREFLIGHT_FAILED');
         }
