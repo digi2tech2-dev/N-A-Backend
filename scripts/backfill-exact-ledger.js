@@ -139,18 +139,20 @@ const runCollection = async ({ model, select, buildUpdate, batchSize, resumeAfte
     return counts;
 };
 
+const getBackfillCollections = () => ({
+    users: { model: User, select: '+walletBalanceUnits +creditLimitUnits +creditUsedUnits walletBalance creditLimit creditUsed walletLedgerVersion', buildUpdate: buildUserUpdate },
+    'wallet-transactions': { model: WalletTransaction, select: '+amountUnits +balanceBeforeUnits +balanceAfterUnits amount balanceBefore balanceAfter', buildUpdate: buildWalletTransactionUpdate },
+    orders: { model: Order, select: '+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits chargedAmount walletDeducted creditUsedAmount', buildUpdate: buildOrderUpdate },
+    currencies: { model: Currency, select: '+platformRateExact platformRate', buildUpdate: buildCurrencyUpdate },
+});
+
 const main = async () => {
     const options = parseArgs();
     if (!process.env.MONGO_URI) throw new Error('MONGO_URI is required.');
     await mongoose.connect(process.env.MONGO_URI);
     try {
         console.log(`Exact-ledger backfill mode: ${options.write ? 'WRITE' : 'DRY-RUN'} (batch ${options.batchSize})`);
-        const collections = {
-            users: { model: User, select: '+walletBalanceUnits +creditLimitUnits +creditUsedUnits walletBalance creditLimit creditUsed walletLedgerVersion', buildUpdate: buildUserUpdate },
-            'wallet-transactions': { model: WalletTransaction, select: '+amountUnits +balanceBeforeUnits +balanceAfterUnits amount balanceBefore balanceAfter', buildUpdate: buildWalletTransactionUpdate },
-            orders: { model: Order, select: '+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits chargedAmount walletDeducted creditUsedAmount', buildUpdate: buildOrderUpdate },
-            currencies: { model: Currency, select: '+platformRateExact platformRate', buildUpdate: buildCurrencyUpdate },
-        };
+        const collections = getBackfillCollections();
         const selected = options.collection ? [options.collection] : Object.keys(collections);
         const results = {};
         for (const name of selected) {
@@ -175,4 +177,6 @@ module.exports = {
     buildWalletTransactionUpdate,
     buildOrderUpdate,
     buildCurrencyUpdate,
+    runCollection,
+    getBackfillCollections,
 };
