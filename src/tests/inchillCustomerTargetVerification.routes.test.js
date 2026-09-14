@@ -10,6 +10,8 @@ jest.mock('../modules/providers/inchill/inchillCustomerTargetVerification.servic
 
 const config = require('../config/config');
 const { Product } = require('../modules/products/product.model');
+const { Provider } = require('../modules/providers/provider.model');
+const { ProviderProduct } = require('../modules/providers/providerProduct.model');
 const { connectTestDB, disconnectTestDB, clearCollections, createCustomerWithGroup } = require('./testHelpers');
 const app = require('../app');
 
@@ -70,5 +72,40 @@ describe('customer Inchill target verification route', () => {
         }));
         expect(response.body.data).toEqual({ verified: true, targetId: '51511', displayName: 'Safe player', vid: '51511', country: 'EG' });
         expect(JSON.stringify(response.body)).not.toMatch(/agentPhone|connection|token|session|raw|secret/i);
+    });
+
+    it('marks the published Inchill adapter relation for the customer runtime shape', async () => {
+        const { customer } = await createCustomerWithGroup();
+        const provider = await Provider.create({ name: `Inchill ${Date.now()}`, slug: 'inchill', baseUrl: 'https://inchill.invalid', syncInterval: 0 });
+        const providerProduct = await ProviderProduct.create({
+            provider: provider._id,
+            externalProductId: 'INCHILL_DIAMOND_AMOUNT',
+            rawName: 'Inchill Diamond',
+            rawPrice: '0',
+            minQty: 1,
+            maxQty: 999999999,
+            rawPayload: { metadata: { serviceType: 'DIAMOND', source: 'inchill-v1' } },
+        });
+        const product = await Product.create({
+            name: `Inchill Diamond ${Date.now()}`,
+            basePrice: '1',
+            minQty: 1,
+            maxQty: 10,
+            provider: provider._id,
+            providerProduct: providerProduct._id,
+            pricingMode: 'manual',
+            executionType: 'automatic',
+        });
+
+        const response = await requestJson('GET', '/api/products', { token: tokenFor(customer) });
+        const listed = response.body.data.find((item) => String(item._id) === String(product._id));
+
+        expect(response.status).toBe(200);
+        expect(listed).toMatchObject({
+            isInchillDiamond: true,
+            requiresInchillTargetVerification: true,
+        });
+        expect(listed).not.toHaveProperty('provider');
+        expect(listed).not.toHaveProperty('providerProduct');
     });
 });
