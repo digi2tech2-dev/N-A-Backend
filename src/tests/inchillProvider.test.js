@@ -540,9 +540,30 @@ describe('Inchill financial execution safety', () => {
         expect(rechargeDiamond).toHaveBeenCalledTimes(1);
     });
 
+    it('settles an authoritative post-send NOT_SENT response as failed, preserves evidence, and refunds once', async () => {
+        const { order } = await fixture();
+        const rechargeDiamond = jest.fn().mockResolvedValue({ data: { transaction: { id: 'tx_not_sent', status: 'FAILED', upstreamStatus: 'NOT_SENT', upstreamCode: 'NOT_SENT_PROVIDER' } } });
+        const refundFailedOrder = jest.fn().mockResolvedValue(true);
+        const service = new InchillFinancialExecutionService({ client: readyClient(rechargeDiamond), refundFailedOrder });
+
+        await service.execute(order._id);
+        await service.execute(order._id);
+
+        const stored = await Order.findById(order._id).select('+inchillFinancial.providerTransactionId');
+        expect(stored.status).toBe(ORDER_STATUS.FAILED);
+        expect(stored.inchillFinancial.mutationState).toBe('FAILED');
+        expect(stored.inchillFinancial.providerStatus).toBe('NOT_SENT');
+        expect(stored.inchillFinancial.providerTransactionId).toBe('tx_not_sent');
+        expect(stored.inchillFinancial.providerCode).toBe('NOT_SENT_PROVIDER');
+        expect(stored.inchillFinancial.timeout).toBe(false);
+        expect(refundFailedOrder).toHaveBeenCalledTimes(1);
+        expect(rechargeDiamond).toHaveBeenCalledTimes(1);
+        await expect(service.reconcile(order._id)).rejects.toMatchObject({ code: 'INCHILL_RECONCILIATION_NOT_APPLICABLE' });
+    });
+
     it.each([
-        ['NOT_SENT', { transaction: { id: 'tx_not_sent', status: 'FAILED', upstreamStatus: 'NOT_SENT' } }, 'NOT_SENT'],
         ['timeout result', { transaction: { id: 'tx_timeout', status: 'FAILED', upstreamStatus: 'UNKNOWN', upstreamTimeout: true } }, 'TIMEOUT'],
+        ['explicit unknown result', { transaction: { id: 'tx_unknown', status: 'FAILED', upstreamStatus: 'UNKNOWN' } }, 'UNKNOWN'],
         ['malformed post-send response', { transaction: {} }, 'UNKNOWN'],
     ])('moves post-send %s to UNKNOWN manual review without a refund or retry', async (_label, data, reason) => {
         const { order } = await fixture();
