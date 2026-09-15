@@ -271,4 +271,28 @@ describe('Hago input authority', () => {
         expect(classifyHagoMutation({ data: { transaction: { status: 'UNKNOWN', upstreamStatus: 'NOT_SENT' } } }).outcome).toBe('AUTHORITATIVE_FAILED');
         expect(HAGO_FINANCIAL_UNKNOWN_REASONS.UPSTREAM_UNKNOWN).toBe('UPSTREAM_UNKNOWN');
     });
+
+    it.each([
+        [null, null],
+        [undefined, null],
+        ['', null],
+        ['   ', null],
+        ['0x10', null],
+        ['1.5', null],
+        [NaN, null],
+        [Infinity, null],
+        [{}, null],
+        [[], null],
+        ['garbage', null],
+        [0, '0'],
+        ['0', '0'],
+        [30500, '30500'],
+        ['30500', '30500'],
+    ])('normalizes upstreamCode %p to providerCode %p', (upstreamCode, providerCode) => {
+        const result = classifyHagoMutation({
+            data: { transaction: { status: 'SUCCESS', upstreamStatus: 'SUCCESS', upstreamCode } },
+        });
+
+        expect(result).toMatchObject({ outcome: 'SUCCESS', providerCode });
+    });
 });

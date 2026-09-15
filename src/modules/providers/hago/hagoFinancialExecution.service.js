@@ -67,6 +67,17 @@ const getTrustedTargetId = (values = {}, providerMapping = null) => {
 
 const isPositiveInteger = (value) => Number.isSafeInteger(Number(value)) && Number(value) > 0;
 
+const normalizeHagoProviderCode = (value) => {
+    if (typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value)) {
+        return String(value);
+    }
+    if (typeof value === 'string' && /^-?\d+$/.test(value)) {
+        const numericValue = Number(value);
+        return Number.isFinite(numericValue) && Number.isInteger(numericValue) ? String(numericValue) : null;
+    }
+    return null;
+};
+
 const classifyHagoMutation = (response) => {
     const safe = sanitizePayload(response?.data ?? response ?? {});
     const transaction = safe?.transaction;
@@ -76,7 +87,7 @@ const classifyHagoMutation = (response) => {
     const safeEvidence = {
         providerTransactionId,
         providerStatus: upstreamStatus || transactionStatus || null,
-        providerCode: Number.isFinite(Number(transaction?.upstreamCode)) ? String(Number(transaction.upstreamCode)) : null,
+        providerCode: normalizeHagoProviderCode(transaction?.upstreamCode),
     };
 
     if (transactionStatus === 'SUCCESS' && upstreamStatus === 'SUCCESS') {
