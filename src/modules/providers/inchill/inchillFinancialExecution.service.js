@@ -13,6 +13,17 @@ const STATES = Object.freeze({ READY: 'READY', CLAIMED: 'CLAIMED', SENT: 'SENT',
 const TARGET_KEYS = new Set(['targetid', 'target_id', 'vid', 'inchillid', 'inchill_id', 'playerid', 'player_id', 'userid', 'user_id', 'uid', 'target']);
 const isInchillDiamondEnabled = (env = process.env) => env.INCHILL_DIAMOND_FULFILLMENT_ENABLED === 'true';
 const isInchillDiamond = (provider, product) => provider?.slug === 'inchill' && (String(product?.externalProductId) === 'INCHILL_DIAMOND_AMOUNT' || product?.rawPayload?.metadata?.serviceType === 'DIAMOND');
+const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value ?? {}, key);
+const hasAcceptedPreflightSession = (responseData, preflight) => {
+    // The legacy contract includes an explicit per-preflight session status.
+    // If it is present, it remains authoritative and must be recognised.
+    if (hasOwn(preflight, 'session')) {
+        return ['VALID', 'CONNECTED'].includes(String(preflight.session ?? '').trim().toUpperCase());
+    }
+    // The production sanitized contract omits preflight.session and instead
+    // confirms the read-only request through the top-level response status.
+    return String(responseData?.status ?? '').trim().toUpperCase() === 'SUCCESS';
+};
 const trustedTarget = (values = {}, mapping = {}) => {
     const found = Object.entries(values).filter(([key, value]) => TARGET_KEYS.has(String(key).toLowerCase()) || TARGET_KEYS.has(String(mapping?.[key] ?? '').toLowerCase())).map(([, value]) => String(value ?? '').trim()).filter(Boolean);
     if (new Set(found).size !== 1) throw new BusinessRuleError('A single Inchill target ID is required.', 'INCHILL_TARGET_INVALID');
@@ -34,7 +45,7 @@ class InchillFinancialExecutionService {
         if (!identity.data?.userInfo?.vid && !identity.data?.userInfo?.nick) throw new BusinessRuleError('The Inchill ID is invalid or unavailable.', 'INCHILL_TARGET_INVALID');
         const checked = await this.client.rechargePreflight(connection.agentPhone, targetId, amount);
         const preflight = checked.data?.preflight;
-        if (!preflight || preflight.readOnly !== true || preflight.mutationAttempted !== false || !['VALID', 'CONNECTED'].includes(String(preflight.session ?? '').toUpperCase()) || preflight.targetResolved !== true || preflight.serviceType !== 'DIAMOND' || preflight.walletSufficient !== true || String(preflight.target?.vid) !== String(targetId) || Number(preflight.amount) !== Number(amount)) {
+        if (!preflight || preflight.readOnly !== true || preflight.mutationAttempted !== false || !hasAcceptedPreflightSession(checked.data, preflight) || preflight.targetResolved !== true || preflight.serviceType !== 'DIAMOND' || preflight.walletSufficient !== true || String(preflight.target?.vid) !== String(targetId) || Number(preflight.amount) !== Number(amount)) {
             if (preflight?.walletSufficient === false) throw new BusinessRuleError('The Inchill provider balance is unavailable.', 'INCHILL_INSUFFICIENT_PROVIDER_BALANCE');
             throw new BusinessRuleError('Inchill recharge preflight failed.', 'INCHILL_PREFLIGHT_FAILED');
         }

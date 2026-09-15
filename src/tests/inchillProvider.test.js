@@ -328,7 +328,7 @@ describe('Inchill customer checkout contract', () => {
         const client = {
             validateSession: jest.fn().mockResolvedValue({ data: { status: 'SUCCESS' } }),
             verifyTarget: jest.fn().mockResolvedValue({ data: { userInfo: { vid: '376756346' } } }),
-            rechargePreflight: jest.fn().mockResolvedValue({ data: { preflight: { readOnly: true, mutationAttempted: false, session: 'VALID', targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '376756346' }, amount: 10 } } }),
+            rechargePreflight: jest.fn().mockResolvedValue({ data: { status: 'SUCCESS', preflight: { readOnly: true, mutationAttempted: false, targetResolved: true, target: { vid: '376756346', uid: '2368426845799625' }, serviceType: 'DIAMOND', amount: 10, currencyType: 3501, useGoldCurrency: false, walletSufficient: true, availableBalance: 6500057, requiredAmount: 10, requestShape: { targetUid: '2368426845799625', transferAmount: 10, currencyType: 3501, useGoldCurrency: false, seqId: 'DYNAMIC' } } } }),
             rechargeDiamond: jest.fn(),
         };
 
@@ -431,6 +431,7 @@ describe('Inchill financial execution safety', () => {
         expect(refundFailedOrder).toHaveBeenCalledTimes(1);
         expect(stored.status).toBe(ORDER_STATUS.FAILED);
         expect(stored.inchillFinancial.mutationState).toBe('FAILED');
+        expect(stored.inchillFinancial.unknownReason).toBe('INCHILL_INSUFFICIENT_PROVIDER_BALANCE');
     });
 
     it('keeps a post-send timeout in manual review without a refund or resend', async () => {
@@ -483,8 +484,14 @@ describe('Inchill financial execution safety', () => {
 
     it.each([
         ['session mismatch', (client) => client.rechargePreflight.mockResolvedValue({ data: { preflight: { readOnly: true, mutationAttempted: false, session: 'UNKNOWN', targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '51511' }, amount: 7 } } })],
+        ['explicit rejected session despite top-level SUCCESS', (client) => client.rechargePreflight.mockResolvedValue({ data: { status: 'SUCCESS', preflight: { readOnly: true, mutationAttempted: false, session: 'REJECTED', targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '51511' }, amount: 7 } } })],
+        ['explicit reauthentication-required session despite top-level SUCCESS', (client) => client.rechargePreflight.mockResolvedValue({ data: { status: 'SUCCESS', preflight: { readOnly: true, mutationAttempted: false, session: 'REAUTH_REQUIRED', targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '51511' }, amount: 7 } } })],
+        ['missing top-level status without a legacy session', (client) => client.rechargePreflight.mockResolvedValue({ data: { preflight: { readOnly: true, mutationAttempted: false, targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '51511' }, amount: 7 } } })],
+        ['unrecognized top-level status without a legacy session', (client) => client.rechargePreflight.mockResolvedValue({ data: { status: 'UNKNOWN', preflight: { readOnly: true, mutationAttempted: false, targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '51511' }, amount: 7 } } })],
         ['target mismatch', (client) => client.rechargePreflight.mockResolvedValue({ data: { preflight: { readOnly: true, mutationAttempted: false, session: 'VALID', targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: 'other' }, amount: 7 } } })],
         ['amount mismatch', (client) => client.rechargePreflight.mockResolvedValue({ data: { preflight: { readOnly: true, mutationAttempted: false, session: 'VALID', targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '51511' }, amount: 8 } } })],
+        ['non-read-only response', (client) => client.rechargePreflight.mockResolvedValue({ data: { status: 'SUCCESS', preflight: { readOnly: false, mutationAttempted: false, targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '51511' }, amount: 7 } } })],
+        ['mutation-attempted response', (client) => client.rechargePreflight.mockResolvedValue({ data: { status: 'SUCCESS', preflight: { readOnly: true, mutationAttempted: true, targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '51511' }, amount: 7 } } })],
     ])('does not mutate when the provider preflight has a %s', async (_label, arrange) => {
         const { order } = await fixture();
         const rechargeDiamond = jest.fn();
