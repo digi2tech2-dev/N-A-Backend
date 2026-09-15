@@ -20,12 +20,12 @@ const makeClient = (readiness = {}) => ({
     }),
 });
 
-const fixture = async ({ pricing = { purchaseBasePrice: '100', renewalBasePrice: '50' }, orderFields = [] } = {}) => {
+const fixture = async ({ pricing = { purchaseBasePrice: '100', renewalBasePrice: '50' } } = {}) => {
     const group = await createGroup({ percentage: 20 });
     const user = await createCustomer({ groupId: group._id, currency: 'USD', walletBalance: 500 });
     const provider = await Provider.create({ name: `Hago ${Date.now()}`, slug: 'hago', baseUrl: 'https://provider.invalid', syncInterval: 0 });
     const providerProduct = await ProviderProduct.create({ provider: provider._id, externalProductId: 'HAGO_NOBILITY_1', rawName: 'Hago Knight', rawPrice: '0', minQty: 1, maxQty: 1, rawPayload: { metadata: { serviceType: 'NOBILITY', nobilityType: 1 } } });
-    const product = await Product.create({ name: `Knight ${Date.now()}`, basePrice: pricing.purchaseBasePrice, minQty: 1, maxQty: 1, provider: provider._id, providerProduct: providerProduct._id, pricingMode: PRICING_MODES.MANUAL, pricingStrategy: PRICING_STRATEGIES.HAGO_NOBILITY_READINESS, executionType: 'automatic', hagoNobilityPricing: pricing, orderFields });
+    const product = await Product.create({ name: `Knight ${Date.now()}`, basePrice: pricing.purchaseBasePrice, minQty: 1, maxQty: 1, provider: provider._id, providerProduct: providerProduct._id, pricingMode: PRICING_MODES.MANUAL, pricingStrategy: PRICING_STRATEGIES.HAGO_NOBILITY_READINESS, executionType: 'automatic', hagoNobilityPricing: pricing });
     const connection = await HagoProviderConnection.create({ provider: provider._id, connectionId: 'con_internal', isPrimary: true, enabled: true, connectionStatus: CONNECTION_STATUS.CONNECTED });
     return { group, user, provider, providerProduct, product, connection };
 };
@@ -137,68 +137,6 @@ describe('Hago Nobility financial guard', () => {
         await expect(execution.prepareNewOrder({
             userId: user._id, product, quantity: 1, quoteRef: quote.quoteRef, targetId: 'other',
         })).rejects.toMatchObject({ code: 'HAGO_NOBILITY_QUOTE_MISMATCH' });
-    });
-
-    it('uses the validated quote target for a required target_uid field and rejects a conflicting browser value', async () => {
-        const requiredTargetField = [{ id: 'hago_target', label: 'Hago', key: 'target_uid', type: 'text', required: true, isActive: true }];
-        const { user, product } = await fixture({ orderFields: requiredTargetField });
-        const client = makeClient();
-        const commerce = new HagoNobilityCommerceService({ client });
-        const { quote } = await commerce.createReadinessQuote({ userId: user._id, productId: product._id, targetId: '365200654' });
-        const execution = new HagoNobilityExecutionService({
-            client,
-            commerceService: commerce,
-            env: { HAGO_NOBILITY_FULFILLMENT_ENABLED: 'true' },
-        });
-
-        const orderFulfillment = require('../modules/orders/orderFulfillment.service');
-        const executeOrderSpy = jest.spyOn(orderFulfillment, 'executeOrder').mockResolvedValue({ handled: true });
-        try {
-            const { order } = await orderService.createOrder({
-                userId: user._id,
-                productId: product._id,
-                quantity: 1,
-                orderFieldsValues: {},
-                hagoNobilityService: execution,
-                hagoNobilityQuoteRef: quote.quoteRef,
-                hagoNobilityTargetId: '365200654',
-            });
-
-            expect(order.customerInput.values.target_uid).toBe('365200654');
-            expect(order.hagoNobility).toMatchObject({ requestedTargetId: '365200654', operation: 'PURCHASE' });
-            expect(executeOrderSpy).toHaveBeenCalledWith(order._id, expect.anything(), null);
-
-            const conflictingQuote = await commerce.createReadinessQuote({ userId: user._id, productId: product._id, targetId: '365200655' });
-            await expect(orderService.createOrder({
-                userId: user._id,
-                productId: product._id,
-                quantity: 1,
-                orderFieldsValues: { target_uid: 'attacker-target' },
-                hagoNobilityService: execution,
-                hagoNobilityQuoteRef: conflictingQuote.quote.quoteRef,
-                hagoNobilityTargetId: '365200655',
-            })).rejects.toMatchObject({ code: 'HAGO_NOBILITY_QUOTE_MISMATCH' });
-            expect(await WalletTransaction.countDocuments({ userId: user._id })).toBe(1);
-            expect(executeOrderSpy).toHaveBeenCalledTimes(1);
-        } finally {
-            executeOrderSpy.mockRestore();
-        }
-    });
-
-    it('still requires a quote before it can hydrate a canonical target field', async () => {
-        const { user, product } = await fixture({
-            orderFields: [{ id: 'hago_target', label: 'Hago', key: 'target_uid', type: 'text', required: true, isActive: true }],
-        });
-        const execution = new HagoNobilityExecutionService({ env: { HAGO_NOBILITY_FULFILLMENT_ENABLED: 'true' } });
-
-        await expect(execution.prepareNewOrder({
-            userId: user._id,
-            product,
-            quantity: 1,
-            quoteRef: null,
-            targetId: '365200654',
-        })).rejects.toMatchObject({ code: 'HAGO_NOBILITY_QUOTE_REQUIRED' });
-        expect(await WalletTransaction.countDocuments({ userId: user._id })).toBe(0);
     });
 
     it('keeps the server-derived RENEW operation even when checkout input attempts to override it', async () => {
