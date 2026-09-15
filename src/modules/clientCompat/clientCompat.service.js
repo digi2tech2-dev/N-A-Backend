@@ -20,11 +20,12 @@ const {
     parseProductIds,
     extractOrderFieldsFromQuery,
 } = require('./clientCompat.mappers');
+const { isExactLedgerEnabled } = require('../wallet/exactLedger.service');
 const {
     isTargetAliasKey,
     normalizeTargetAliasKey,
 } = require('../providers/adapters/providerParams.helper');
-const { buildWalletSummary } = require('../../shared/utils/walletSummary');
+const { buildWalletSummary, buildExactPublicWalletSummary } = require('../../shared/utils/walletSummary');
 
 const PRODUCT_SELECT = [
     'compatProductId',
@@ -51,6 +52,13 @@ const toBalanceString = (value) => {
 };
 
 const getProfile = async (reseller) => {
+    if (isExactLedgerEnabled()) {
+        const walletSummary = buildExactPublicWalletSummary(reseller);
+        return {
+            balance: walletSummary.availableBalance,
+            email: reseller.email || null,
+        };
+    }
     const walletSummary = buildWalletSummary(reseller);
     return {
         balance: toBalanceString(walletSummary.availableBalance),
@@ -356,6 +364,7 @@ const ensureCompatOrderId = async (orderOrId) => {
 };
 
 const populateOrderForCompat = async (orderId) => Order.findById(orderId)
+    .select(isExactLedgerEnabled() ? '+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits' : '')
     .populate('productId', 'name')
     .lean();
 
@@ -415,6 +424,7 @@ const listOrders = async (reseller, ids, { byUuid = false } = {}) => {
         };
 
     const orders = await Order.find(filter)
+        .select(isExactLedgerEnabled() ? '+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits' : '')
         .populate('productId', 'name')
         .lean();
 

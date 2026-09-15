@@ -22,7 +22,11 @@ const { legacyMoneyToUnits } = require('../../shared/utils/exactLedgerMoney');
 const { NotFoundError, BusinessRuleError } = require('../../shared/errors/AppError');
 const { createAuditLog } = require('../audit/audit.service');
 const { ADMIN_ACTIONS, ENTITY_TYPES, ACTOR_ROLES } = require('../audit/audit.constants');
-const { buildPublicWalletSummary } = require('../../shared/utils/walletSummary');
+const { buildPublicWalletSummary, buildExactPublicWalletSummary } = require('../../shared/utils/walletSummary');
+const {
+    serializeExactCompatibleUser,
+    serializeExactCompatibleTransaction,
+} = require('../../shared/utils/exactLedgerCompatibility');
 
 const MAX_ADJUSTMENT = 100_000;  // guard against fat-finger typos
 
@@ -41,10 +45,11 @@ const safeRound = (value, decimals = 2) => {
 const listWallets = async ({ page = 1, limit = 20 } = {}) => {
     limit = Math.min(limit, 100);
     const skip = (page - 1) * limit;
+    const exactLedgerEnabled = isExactLedgerEnabled();
 
     const [users, total] = await Promise.all([
         User.find({ deletedAt: null })
-            .select('name email walletBalance creditLimit creditUsed currency role status')
+            .select(`name email walletBalance creditLimit creditUsed currency role status${exactLedgerEnabled ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`)
             .sort({ walletBalance: -1 })
             .skip(skip)
             .limit(limit),
@@ -53,8 +58,10 @@ const listWallets = async ({ page = 1, limit = 20 } = {}) => {
 
     return {
         wallets: users.map((user) => ({
-            ...(user.toSafeObject ? user.toSafeObject() : user.toObject()),
-            ...buildPublicWalletSummary(user),
+            ...(exactLedgerEnabled
+                ? serializeExactCompatibleUser(user)
+                : (user.toSafeObject ? user.toSafeObject() : user.toObject())),
+            ...(exactLedgerEnabled ? buildExactPublicWalletSummary(user) : buildPublicWalletSummary(user)),
         })),
         pagination: { page, limit, total, pages: Math.ceil(total / limit) },
     };
@@ -63,23 +70,29 @@ const listWallets = async ({ page = 1, limit = 20 } = {}) => {
 // ─── Get one user's wallet ─────────────────────────────────────────────────────
 
 const getWallet = async (userId) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const user = await User.findById(userId)
-        .select('name email walletBalance creditLimit creditUsed currency status');
+        .select(`name email walletBalance creditLimit creditUsed currency status${exactLedgerEnabled ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`);
     if (!user) throw new NotFoundError('User');
 
     // Fetch recent transactions WITH populated references so the frontend
     // store is never overwritten with unpopulated/missing transaction data.
     const recentTransactions = await WalletTransaction.find({ userId })
+        .select(exactLedgerEnabled ? '+amountUnits +balanceBeforeUnits +balanceAfterUnits' : '')
         .sort({ createdAt: -1 })
         .limit(20)
         .populate('reference', 'orderNumber customerInput status totalPrice');
 
     return {
         user: {
-            ...(user.toSafeObject ? user.toSafeObject() : user.toObject()),
-            ...buildPublicWalletSummary(user),
+            ...(exactLedgerEnabled
+                ? serializeExactCompatibleUser(user)
+                : (user.toSafeObject ? user.toSafeObject() : user.toObject())),
+            ...(exactLedgerEnabled ? buildExactPublicWalletSummary(user) : buildPublicWalletSummary(user)),
         },
-        recentTransactions,
+        recentTransactions: exactLedgerEnabled
+            ? recentTransactions.map(serializeExactCompatibleTransaction)
+            : recentTransactions,
     };
 };
 
@@ -91,9 +104,11 @@ const getTransactionHistory = async (userId, { page = 1, limit = 20 } = {}) => {
 
     limit = Math.min(limit, 100);
     const skip = (page - 1) * limit;
+    const exactLedgerEnabled = isExactLedgerEnabled();
 
     const [transactions, total] = await Promise.all([
         WalletTransaction.find({ userId })
+            .select(exactLedgerEnabled ? '+amountUnits +balanceBeforeUnits +balanceAfterUnits' : '')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -101,7 +116,10 @@ const getTransactionHistory = async (userId, { page = 1, limit = 20 } = {}) => {
         WalletTransaction.countDocuments({ userId }),
     ]);
 
-    return { transactions, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    return {
+        transactions: exactLedgerEnabled ? transactions.map(serializeExactCompatibleTransaction) : transactions,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    };
 };
 
 // ─── Manual Add ───────────────────────────────────────────────────────────────

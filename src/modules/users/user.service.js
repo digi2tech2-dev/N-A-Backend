@@ -6,6 +6,7 @@ const { Currency } = require('../currency/currency.model');
 const { recalculateCreditUsed } = require('../wallet/wallet.service');
 const { isExactLedgerEnabled, updateExactCreditLimitAtomic } = require('../wallet/exactLedger.service');
 const { legacyMoneyToUnits } = require('../../shared/utils/exactLedgerMoney');
+const { serializeExactCompatibleUser } = require('../../shared/utils/exactLedgerCompatibility');
 const { AppError, NotFoundError, ConflictError, BusinessRuleError } = require('../../shared/errors/AppError');
 const { createAuditLog } = require('../audit/audit.service');
 const { USER_ACTIONS, ENTITY_TYPES, ACTOR_ROLES } = require('../audit/audit.constants');
@@ -49,6 +50,7 @@ const normalizeActiveCurrency = async (currency) => {
  * Supports filtering by role, status, groupId.
  */
 const listUsers = async ({ page = 1, limit = 20, role, status, groupId } = {}) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const filter = {};
     if (role) filter.role = role;
     if (status) filter.status = status;
@@ -58,7 +60,7 @@ const listUsers = async ({ page = 1, limit = 20, role, status, groupId } = {}) =
 
     const [users, total] = await Promise.all([
         User.find(filter)
-            .select('-password')
+            .select(`-password${exactLedgerEnabled ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`)
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -67,7 +69,7 @@ const listUsers = async ({ page = 1, limit = 20, role, status, groupId } = {}) =
     ]);
 
     return {
-        users,
+        users: exactLedgerEnabled ? users.map(serializeExactCompatibleUser) : users,
         pagination: { page, limit, total, pages: Math.ceil(total / limit) },
     };
 };
@@ -76,11 +78,12 @@ const listUsers = async ({ page = 1, limit = 20, role, status, groupId } = {}) =
  * Admin: Get a user by ID.
  */
 const getUserById = async (id) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const user = await User.findById(id)
-        .select('-password')
+        .select(`-password${exactLedgerEnabled ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`)
         .populate('groupId', GROUP_PROJECTION);
     if (!user) throw new NotFoundError('User');
-    return user;
+    return exactLedgerEnabled ? serializeExactCompatibleUser(user) : user;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,11 +255,14 @@ const updateUser = async (id, { groupId, creditLimit, name, quantityLimit }) => 
  * Customer: Get own profile.
  */
 const getMyProfile = async (userId) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const user = await User.findById(userId)
-        .select('-password')
+        .select(`-password${exactLedgerEnabled ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`)
         .populate('groupId', GROUP_PROJECTION);
     if (!user) throw new NotFoundError('User');
-    return user.toSafeObject ? user.toSafeObject() : user.toObject();
+    return exactLedgerEnabled
+        ? serializeExactCompatibleUser(user)
+        : (user.toSafeObject ? user.toSafeObject() : user.toObject());
 };
 
 /**

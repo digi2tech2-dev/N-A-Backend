@@ -1,6 +1,8 @@
 'use strict';
 
 const orderService = require('./order.service');
+const { isExactLedgerEnabled } = require('../wallet/exactLedger.service');
+const { serializeExactCompatibleOrder } = require('../../shared/utils/exactLedgerCompatibility');
 const { sendSuccess, sendCreated, sendPaginated } = require('../../shared/utils/apiResponse');
 const catchAsync = require('../../shared/utils/catchAsync');
 
@@ -48,7 +50,14 @@ const normalizeCustomInputsPayload = (customInputs) => {
 // API boundary explicit so a checkout response cannot disclose provider
 // credentials, mutation identifiers, cost, or raw upstream evidence.
 const serializeCustomerOrder = (order) => {
-    const serialized = order?.toObject ? order.toObject() : { ...order };
+    let serialized = order?.toObject ? order.toObject() : { ...order };
+    if (isExactLedgerEnabled() && [
+        'chargedAmountUnits',
+        'walletDeductedUnits',
+        'creditUsedAmountUnits',
+    ].some((field) => Object.prototype.hasOwnProperty.call(serialized, field))) {
+        serialized = serializeExactCompatibleOrder(serialized);
+    }
     delete serialized.providerRawResponse;
     if (!serialized?.hagoNobility) return serialized;
 

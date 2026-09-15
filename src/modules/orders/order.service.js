@@ -31,6 +31,7 @@ const Group = require('../groups/group.model');
 const { getLivePrice, invalidate: invalidatePriceCache } = require('../providers/providerPriceCache');
 const { toDecimal, toStr, toFiat, multiply, subtract, add, isPositive, compare } = require('../../shared/utils/decimalPrecision');
 const { decimalStringToUnits, unitsToDecimalString, compareUnits } = require('../../shared/utils/exactLedgerMoney');
+const { serializeExactCompatibleOrder } = require('../../shared/utils/exactLedgerCompatibility');
 const { notifyNewManualOrder, notifyOrderCompleted, notifyOrderFailed } = require('../notifications/notification.service');
 const whatsappService = require('../whatsapp/whatsapp.service');
 const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
@@ -1713,22 +1714,29 @@ const markOrderAsCompleted = async (orderId, auditContext = null) => {
 
 const listOrdersForUser = async (userId, { page = 1, limit = 20 } = {}) => {
     const skip = (page - 1) * limit;
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const [orders, total] = await Promise.all([
         Order.find({ userId })
+            .select(exactLedgerEnabled ? '+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits' : '')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
             .populate('productId', 'name basePrice executionType'),
         Order.countDocuments({ userId }),
     ]);
-    return { orders, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    return {
+        orders: exactLedgerEnabled ? orders.map(serializeExactCompatibleOrder) : orders,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    };
 };
 
 const listAllOrders = async ({ page = 1, limit = 20, status } = {}) => {
     const filter = status ? { status } : {};
     const skip = (page - 1) * limit;
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const [orders, total] = await Promise.all([
         Order.find(filter)
+            .select(exactLedgerEnabled ? '+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits' : '')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -1736,20 +1744,24 @@ const listAllOrders = async ({ page = 1, limit = 20, status } = {}) => {
             .populate('userId', 'name email'),
         Order.countDocuments(filter),
     ]);
-    return { orders, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    return {
+        orders: exactLedgerEnabled ? orders.map(serializeExactCompatibleOrder) : orders,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    };
 };
 
 const getOrderById = async (orderId, userId = null) => {
     const filter = { _id: orderId };
     if (userId) filter.userId = userId;
 
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const order = await Order.findOne(filter)
         .select('+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits')
         .populate('productId', 'name basePrice minQty maxQty executionType')
         .populate('userId', 'name email');
 
     if (!order) throw new NotFoundError('Order');
-    return order;
+    return exactLedgerEnabled ? serializeExactCompatibleOrder(order) : order;
 };
 
 module.exports = {

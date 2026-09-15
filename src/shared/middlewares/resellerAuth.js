@@ -1,6 +1,7 @@
 'use strict';
 
 const { User, USER_STATUS } = require('../../modules/users/user.model');
+const { isExactLedgerEnabled } = require('../../modules/wallet/exactLedger.service');
 
 const normalizeIp = (value) => String(value || '')
     .split(',')[0]
@@ -71,7 +72,7 @@ const resellerAuth = async (req, res, next) => {
             };
 
         const candidates = await User.find(candidateFilter)
-            .select('+apiToken +apiSecret name email role status walletBalance creditLimit creditUsed currency groupId isApiEnabled whitelistIps webhookUrl')
+            .select(`+apiToken +apiSecret name email role status walletBalance creditLimit creditUsed currency groupId isApiEnabled whitelistIps webhookUrl${isExactLedgerEnabled() ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`)
             .populate('groupId', 'name percentage isActive billingMode');
 
         let reseller = null;

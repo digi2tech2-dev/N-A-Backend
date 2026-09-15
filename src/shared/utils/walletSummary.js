@@ -1,6 +1,16 @@
 'use strict';
 
 const Decimal = require('decimal.js');
+const {
+    readExactCompatibleLedger,
+    serializeExactCompatibleLedger,
+} = require('./exactLedgerCompatibility');
+const {
+    addUnits,
+    subtractUnits,
+    compareUnits,
+    unitsToDecimalString,
+} = require('./exactLedgerMoney');
 
 const toDecimal = (value) => {
     try {
@@ -44,9 +54,29 @@ const buildPublicWalletSummary = (source = {}) => {
     return summary;
 };
 
+const buildExactPublicWalletSummary = (source = {}) => {
+    const compatible = readExactCompatibleLedger(source);
+    const { exactLedger } = serializeExactCompatibleLedger(source);
+    const { walletBalanceUnits, creditLimitUnits, creditUsedUnits } = compatible.units;
+    const rawAvailableBalance = addUnits(walletBalanceUnits, creditLimitUnits);
+    const availableBalance = compareUnits(rawAvailableBalance, '0') < 0 ? '0' : rawAvailableBalance;
+    const remainingCredit = subtractUnits(creditLimitUnits, creditUsedUnits);
+    const availableCredit = compareUnits(remainingCredit, '0') < 0 ? '0' : remainingCredit;
+
+    return {
+        walletBalance: exactLedger.walletBalance,
+        creditLimit: exactLedger.creditLimit,
+        creditUsed: exactLedger.creditUsed,
+        availableCredit: unitsToDecimalString(availableCredit),
+        availableBalance: unitsToDecimalString(availableBalance),
+        currency: String(source.currency || 'USD').toUpperCase(),
+    };
+};
+
 module.exports = {
     buildWalletSummary,
     buildPublicWalletSummary,
+    buildExactPublicWalletSummary,
     roundMoneyDecimal,
     toMoneyNumber,
 };

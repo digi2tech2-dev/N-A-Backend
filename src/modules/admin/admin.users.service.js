@@ -14,6 +14,7 @@ const { User, USER_STATUS, ROLES } = require('../users/user.model');
 const { recalculateCreditUsed } = require('../wallet/wallet.service');
 const { isExactLedgerEnabled, updateExactCreditLimitAtomic } = require('../wallet/exactLedger.service');
 const { legacyMoneyToUnits } = require('../../shared/utils/exactLedgerMoney');
+const { serializeExactCompatibleUser } = require('../../shared/utils/exactLedgerCompatibility');
 const { NotFoundError, ConflictError, BusinessRuleError } = require('../../shared/errors/AppError');
 const { createAuditLog } = require('../audit/audit.service');
 const {
@@ -64,6 +65,7 @@ const listUsers = async ({
     sortBy = 'createdAt',
     sortOrder = 'desc',
 } = {}) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const normalizedPage = Number.isFinite(Number(page)) && Number(page) > 0
         ? Math.floor(Number(page))
         : 1;
@@ -101,7 +103,7 @@ const listUsers = async ({
 
     const [users, total] = await Promise.all([
         User.find(filter)
-            .select('-password -emailVerificationToken -emailVerificationExpires')
+            .select(`-password -emailVerificationToken -emailVerificationExpires${exactLedgerEnabled ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`)
             .populate('groupId', 'name percentage')
             .sort(sort)
             .skip(skip)
@@ -110,7 +112,7 @@ const listUsers = async ({
     ]);
 
     return {
-        users,
+        users: exactLedgerEnabled ? users.map(serializeExactCompatibleUser) : users,
         pagination: {
             page: normalizedPage,
             limit: normalizedLimit,
@@ -123,11 +125,12 @@ const listUsers = async ({
 // ─── Get One ───────────────────────────────────────────────────────────────────
 
 const getUserById = async (id) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const user = await User.findById(id)
-        .select('-password -emailVerificationToken -emailVerificationExpires')
+        .select(`-password -emailVerificationToken -emailVerificationExpires${exactLedgerEnabled ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`)
         .populate('groupId', 'name percentage isActive');
     if (!user) throw new NotFoundError('User');
-    return user;
+    return exactLedgerEnabled ? serializeExactCompatibleUser(user) : user;
 };
 
 // ─── Update ────────────────────────────────────────────────────────────────────

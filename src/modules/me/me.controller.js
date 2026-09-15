@@ -16,7 +16,12 @@ const productService = require('../products/product.service');
 const { sendSuccess, sendCreated, sendPaginated } = require('../../shared/utils/apiResponse');
 const catchAsync = require('../../shared/utils/catchAsync');
 const { AuthorizationError, BusinessRuleError, NotFoundError } = require('../../shared/errors/AppError');
-const { buildPublicWalletSummary } = require('../../shared/utils/walletSummary');
+const { isExactLedgerEnabled } = require('../wallet/exactLedger.service');
+const { buildPublicWalletSummary, buildExactPublicWalletSummary } = require('../../shared/utils/walletSummary');
+const {
+    serializeExactCompatibleTransaction,
+    serializeExactCompatibleOrder,
+} = require('../../shared/utils/exactLedgerCompatibility');
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -75,15 +80,16 @@ const resolveOrderFieldsPayload = ({ orderFieldsValues, customInputs, dynamicFie
  * Return the authenticated user's full profile including wallet and group info.
  */
 const getProfile = catchAsync(async (req, res) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const user = await User.findById(req.user._id)
-        .select('-password -__v')
+        .select(`-password -__v${exactLedgerEnabled ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`)
         .populate('groupId', 'name percentage isActive billingMode');
 
     if (!user) throw new NotFoundError('User');
 
     const groupData = user.groupId;
     const billingMode = groupData?.billingMode || 'standard';
-    const walletSummary = buildPublicWalletSummary(user);
+    const walletSummary = exactLedgerEnabled ? buildExactPublicWalletSummary(user) : buildPublicWalletSummary(user);
 
     sendSuccess(res, {
         _id: user._id,
@@ -157,11 +163,14 @@ const updateApiSettings = catchAsync(async (req, res) => {
  * Wallet summary: balance + last 5 transactions.
  */
 const getWallet = catchAsync(async (req, res) => {
-    const user = await User.findById(req.user._id).select('walletBalance currency creditLimit creditUsed');
+    const exactLedgerEnabled = isExactLedgerEnabled();
+    const user = await User.findById(req.user._id)
+        .select(`walletBalance currency creditLimit creditUsed${exactLedgerEnabled ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`);
     if (!user) throw new NotFoundError('User');
-    const walletSummary = buildPublicWalletSummary(user);
+    const walletSummary = exactLedgerEnabled ? buildExactPublicWalletSummary(user) : buildPublicWalletSummary(user);
 
     const recent = await WalletTransaction.find({ userId: req.user._id })
+        .select(exactLedgerEnabled ? '+amountUnits +balanceBeforeUnits +balanceAfterUnits' : '')
         .sort({ createdAt: -1 })
         .limit(5)
         .populate('reference', 'orderNumber customerInput status totalPrice')
@@ -176,7 +185,7 @@ const getWallet = catchAsync(async (req, res) => {
         coins: walletSummary.walletBalance,
         balance: walletSummary.walletBalance,
         currency: walletSummary.currency,
-        recentTransactions: recent,
+        recentTransactions: exactLedgerEnabled ? recent.map(serializeExactCompatibleTransaction) : recent,
     }, 'Wallet summary retrieved.');
 });
 
@@ -189,6 +198,7 @@ const getWallet = catchAsync(async (req, res) => {
  * Query: page, limit, from (ISO date), to (ISO date)
  */
 const getTransactions = catchAsync(async (req, res) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const page = parsePage(req.query.page);
     const limit = parseLimit(req.query.limit);
     const filter = { userId: req.user._id };
@@ -202,11 +212,17 @@ const getTransactions = catchAsync(async (req, res) => {
     const skip = (page - 1) * limit;
     const [transactions, total] = await Promise.all([
         WalletTransaction.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit)
+            .select(exactLedgerEnabled ? '+amountUnits +balanceBeforeUnits +balanceAfterUnits' : '')
             .populate('reference', 'orderNumber customerInput status totalPrice').lean(),
         WalletTransaction.countDocuments(filter),
     ]);
 
-    sendPaginated(res, transactions, { page, limit, total, pages: Math.ceil(total / limit) }, 'Transactions retrieved.');
+    sendPaginated(
+        res,
+        exactLedgerEnabled ? transactions.map(serializeExactCompatibleTransaction) : transactions,
+        { page, limit, total, pages: Math.ceil(total / limit) },
+        'Transactions retrieved.'
+    );
 });
 
 // =============================================================================
@@ -218,6 +234,7 @@ const getTransactions = catchAsync(async (req, res) => {
  * Query: status, page, limit, from, to
  */
 const getOrders = catchAsync(async (req, res) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const page = parsePage(req.query.page);
     const limit = parseLimit(req.query.limit);
     const filter = {
@@ -235,6 +252,7 @@ const getOrders = catchAsync(async (req, res) => {
     const skip = (page - 1) * limit;
     const [orders, total] = await Promise.all([
         Order.find(filter)
+            .select(exactLedgerEnabled ? '+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits' : '')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -243,7 +261,12 @@ const getOrders = catchAsync(async (req, res) => {
         Order.countDocuments(filter),
     ]);
 
-    sendPaginated(res, orders, { page, limit, total, pages: Math.ceil(total / limit) }, 'Orders retrieved.');
+    sendPaginated(
+        res,
+        exactLedgerEnabled ? orders.map(serializeExactCompatibleOrder) : orders,
+        { page, limit, total, pages: Math.ceil(total / limit) },
+        'Orders retrieved.'
+    );
 });
 
 /**

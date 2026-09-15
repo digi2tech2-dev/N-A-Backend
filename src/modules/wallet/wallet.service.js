@@ -4,6 +4,7 @@ const { User, USER_STATUS } = require('../users/user.model');
 const { WalletTransaction, TRANSACTION_TYPES } = require('./walletTransaction.model');
 const { NotFoundError, BusinessRuleError, InsufficientFundsError } = require('../../shared/errors/AppError');
 const { legacyMoneyToUnits } = require('../../shared/utils/exactLedgerMoney');
+const { serializeExactCompatibleTransaction } = require('../../shared/utils/exactLedgerCompatibility');
 const {
     isExactLedgerEnabled,
     debitExactWalletAtomic,
@@ -445,9 +446,11 @@ const creditWalletDirect = async ({
  */
 const getTransactionHistory = async (userId, { page = 1, limit = 20 } = {}) => {
     const skip = (page - 1) * limit;
+    const exactLedgerEnabled = isExactLedgerEnabled();
 
     const [transactions, total] = await Promise.all([
         WalletTransaction.find({ userId })
+            .select(exactLedgerEnabled ? '+amountUnits +balanceBeforeUnits +balanceAfterUnits' : '')
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(limit)
@@ -456,7 +459,9 @@ const getTransactionHistory = async (userId, { page = 1, limit = 20 } = {}) => {
     ]);
 
     return {
-        transactions,
+        transactions: exactLedgerEnabled
+            ? transactions.map(serializeExactCompatibleTransaction)
+            : transactions,
         pagination: {
             page,
             limit,

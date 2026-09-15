@@ -7,7 +7,8 @@ const { calculateFinalPrice } = require('../orders/pricing.service');
 const { convertUsdToUserCurrency } = require('../../services/currencyConverter.service');
 const { sendSuccess, sendCreated } = require('../../shared/utils/apiResponse');
 const catchAsync = require('../../shared/utils/catchAsync');
-const { buildPublicWalletSummary } = require('../../shared/utils/walletSummary');
+const { buildPublicWalletSummary, buildExactPublicWalletSummary } = require('../../shared/utils/walletSummary');
+const { isExactLedgerEnabled } = require('../wallet/exactLedger.service');
 
 const toPublicProduct = async (product, reseller) => {
     const percentage = Number(reseller.groupId?.percentage || 0);
@@ -61,7 +62,9 @@ const buildOrderFields = ({ playerId, orderFieldsValues, dynamicFields, customIn
 
 const getBalance = catchAsync(async (req, res) => {
     const reseller = req.reseller;
-    const walletSummary = buildPublicWalletSummary(reseller);
+    const walletSummary = isExactLedgerEnabled()
+        ? buildExactPublicWalletSummary(reseller)
+        : buildPublicWalletSummary(reseller);
 
     sendSuccess(res, {
         email: reseller.email || req.user?.email || null,

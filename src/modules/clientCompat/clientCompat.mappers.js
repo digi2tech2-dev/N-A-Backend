@@ -1,6 +1,8 @@
 'use strict';
 
 const { ORDER_STATUS } = require('../orders/order.model');
+const { isExactLedgerEnabled } = require('../wallet/exactLedger.service');
+const { unitsToDecimalString } = require('../../shared/utils/exactLedgerMoney');
 
 const toNumber = (value, fallback = 0) => {
     const numeric = Number(value);
@@ -188,6 +190,9 @@ const getOrderData = (order = {}) => {
 };
 
 const getOrderPrice = (order = {}) => {
+    if (isExactLedgerEnabled() && typeof order.chargedAmountUnits === 'string' && order.chargedAmountUnits.trim()) {
+        return unitsToDecimalString(order.chargedAmountUnits);
+    }
     if (order.chargedAmount !== null && order.chargedAmount !== undefined) {
         return order.chargedAmount;
     }
@@ -200,7 +205,7 @@ const getOrderPrice = (order = {}) => {
 const mapCreatedOrder = (order = {}) => ({
     order_id: order.compatOrderId,
     status: mapStatus(order.status),
-    price: toFixedCompatNumber(getOrderPrice(order)),
+    price: isExactLedgerEnabled() ? String(getOrderPrice(order)) : toFixedCompatNumber(getOrderPrice(order)),
     data: getOrderData(order),
     replay_api: null,
 });

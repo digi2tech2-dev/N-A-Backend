@@ -9,8 +9,12 @@ const { User, USER_STATUS } = require('../users/user.model');
 const { Product } = require('../products/product.model');
 const catchAsync = require('../../shared/utils/catchAsync');
 const { sendSuccess } = require('../../shared/utils/apiResponse');
+const { isExactLedgerEnabled } = require('../wallet/exactLedger.service');
+const { readExactCompatibleLedger } = require('../../shared/utils/exactLedgerCompatibility');
+const { addUnits, unitsToDecimalString } = require('../../shared/utils/exactLedgerMoney');
 
 const getDashboardStats = catchAsync(async (req, res) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const parseDate = (value, { endOfDay = false } = {}) => {
         if (!value) return null;
 
@@ -45,6 +49,22 @@ const getDashboardStats = catchAsync(async (req, res) => {
     });
 
     const roundMoney = (value) => Number((Number(value) || 0).toFixed(2));
+
+    const userStatsQuery = exactLedgerEnabled
+        ? User.find({ deletedAt: null }).select('status walletBalance +walletBalanceUnits creditLimit +creditLimitUnits creditUsed +creditUsedUnits')
+        : User.aggregate([
+            { $match: { deletedAt: null } },
+            {
+                $group: {
+                    _id: null,
+                    totalUsers: { $sum: 1 },
+                    activeUsers: {
+                        $sum: { $cond: [{ $eq: ['$status', USER_STATUS.ACTIVE] }, 1, 0] },
+                    },
+                    totalWalletBalance: { $sum: { $ifNull: ['$walletBalance', 0] } },
+                },
+            },
+        ]);
 
     const [orderStatsResult, userStatsResult, productStatsResult] = await Promise.all([
         Order.aggregate([
@@ -167,19 +187,7 @@ const getDashboardStats = catchAsync(async (req, res) => {
                 },
             },
         ]),
-        User.aggregate([
-            { $match: { deletedAt: null } },
-            {
-                $group: {
-                    _id: null,
-                    totalUsers: { $sum: 1 },
-                    activeUsers: {
-                        $sum: { $cond: [{ $eq: ['$status', USER_STATUS.ACTIVE] }, 1, 0] },
-                    },
-                    totalWalletBalance: { $sum: { $ifNull: ['$walletBalance', 0] } },
-                },
-            },
-        ]),
+        userStatsQuery,
         Product.aggregate([
             { $match: { deletedAt: null } },
             {
@@ -197,7 +205,16 @@ const getDashboardStats = catchAsync(async (req, res) => {
     const orderStats = orderStatsResult?.[0] || {};
     const totals = orderStats?.totals?.[0] || {};
     const financials = orderStats?.financials?.[0] || {};
-    const userStats = userStatsResult?.[0] || {};
+    const userStats = exactLedgerEnabled
+        ? {
+            totalUsers: userStatsResult.length,
+            activeUsers: userStatsResult.filter((user) => user.status === USER_STATUS.ACTIVE).length,
+            totalWalletBalance: unitsToDecimalString(userStatsResult.reduce(
+                (total, user) => addUnits(total, readExactCompatibleLedger(user).units.walletBalanceUnits),
+                '0'
+            )),
+        }
+        : (userStatsResult?.[0] || {});
     const productStats = productStatsResult?.[0] || {};
 
     sendSuccess(res, {
@@ -221,7 +238,9 @@ const getDashboardStats = catchAsync(async (req, res) => {
         users: {
             total: userStats.totalUsers || 0,
             active: userStats.activeUsers || 0,
-            totalWalletBalance: roundMoney(userStats.totalWalletBalance),
+            totalWalletBalance: exactLedgerEnabled
+                ? userStats.totalWalletBalance
+                : roundMoney(userStats.totalWalletBalance),
         },
         products: {
             total: productStats.totalProducts || 0,

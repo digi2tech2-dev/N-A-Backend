@@ -10,7 +10,8 @@ const mongoose = require('mongoose');
 const { Order, ORDER_STATUS } = require('../orders/order.model');
 const { markOrderAsFailed, processOrderRefund } = require('../orders/order.service');
 const { forcedDebitWallet } = require('../wallet/wallet.service');
-const { debitExactWalletAtomic } = require('../wallet/exactLedger.service');
+const { debitExactWalletAtomic, isExactLedgerEnabled } = require('../wallet/exactLedger.service');
+const { serializeExactCompatibleOrder, serializeExactCompatibleUser } = require('../../shared/utils/exactLedgerCompatibility');
 const { getProviderAdapter } = require('../providers/adapters/adapter.factory');
 const { Provider } = require('../providers/provider.model');
 const { NotFoundError, BusinessRuleError } = require('../../shared/errors/AppError');
@@ -66,6 +67,7 @@ const listOrders = async ({
     page = 1,
     limit = 20,
 } = {}) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     limit = Math.min(limit, 500);
     const skip = (page - 1) * limit;
 
@@ -115,23 +117,32 @@ const listOrders = async ({
     // 3. CRITICAL: Pass the EXACT SAME queryFilter to BOTH countDocuments and find.
     const total = await Order.countDocuments(queryFilter);
     const orders = await Order.find(queryFilter)
+        .select(exactLedgerEnabled ? '+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits' : '')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .populate('productId', 'name basePrice executionType provider')
         .populate('userId', 'name email');
 
-    return { orders, pagination: { page, limit, total, pages: Math.ceil(total / limit) } };
+    return {
+        orders: exactLedgerEnabled ? orders.map(serializeExactCompatibleOrder) : orders,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+    };
 };
 
 // ─── Get One ──────────────────────────────────────────────────────────────────
 
 const getOrderById = async (id) => {
+    const exactLedgerEnabled = isExactLedgerEnabled();
     const order = await Order.findById(id)
+        .select(exactLedgerEnabled ? '+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits' : '')
         .populate('productId', 'name basePrice minQty maxQty executionType provider')
-        .populate('userId', 'name email walletBalance');
+        .populate('userId', `name email walletBalance${exactLedgerEnabled ? ' +walletBalanceUnits +creditLimitUnits +creditUsedUnits' : ''}`);
     if (!order) throw new NotFoundError('Order');
-    return order;
+    if (!exactLedgerEnabled) return order;
+    const serialized = serializeExactCompatibleOrder(order);
+    if (serialized.userId) serialized.userId = serializeExactCompatibleUser(serialized.userId);
+    return serialized;
 };
 
 // ─── Retry ────────────────────────────────────────────────────────────────────

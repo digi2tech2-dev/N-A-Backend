@@ -62,8 +62,59 @@ const serializeExactCompatibleLedger = (source = {}) => {
     };
 };
 
+const toPlainObject = (source = {}) => {
+    if (source?.toSafeObject) return source.toSafeObject();
+    if (source?.toObject) return source.toObject();
+    return { ...source };
+};
+
+const withoutExactFields = (source, fields) => {
+    const serialized = toPlainObject(source);
+    for (const field of fields) delete serialized[field];
+    return serialized;
+};
+
+const decimalForExactField = (source, exactField, legacyField) => {
+    if (typeof source?.[exactField] === 'string' && source[exactField].trim()) {
+        return unitsToDecimalString(source[exactField]);
+    }
+    if (source?.[legacyField] == null) return null;
+    return unitsToDecimalString(legacyMoneyToUnits(source[legacyField], { label: legacyField }));
+};
+
+/**
+ * Public exact-ledger serializers deliberately retain the existing monetary
+ * property names while removing the internal scale-56 unit strings.
+ */
+const serializeExactCompatibleUser = (source = {}) => {
+    const { exactLedger } = serializeExactCompatibleLedger(source);
+    return {
+        ...withoutExactFields(source, ['walletBalanceUnits', 'creditLimitUnits', 'creditUsedUnits']),
+        walletBalance: exactLedger.walletBalance,
+        creditLimit: exactLedger.creditLimit,
+        creditUsed: exactLedger.creditUsed,
+    };
+};
+
+const serializeExactCompatibleTransaction = (source = {}) => ({
+    ...withoutExactFields(source, ['amountUnits', 'balanceBeforeUnits', 'balanceAfterUnits']),
+    amount: decimalForExactField(source, 'amountUnits', 'amount'),
+    balanceBefore: decimalForExactField(source, 'balanceBeforeUnits', 'balanceBefore'),
+    balanceAfter: decimalForExactField(source, 'balanceAfterUnits', 'balanceAfter'),
+});
+
+const serializeExactCompatibleOrder = (source = {}) => ({
+    ...withoutExactFields(source, ['chargedAmountUnits', 'walletDeductedUnits', 'creditUsedAmountUnits']),
+    chargedAmount: decimalForExactField(source, 'chargedAmountUnits', 'chargedAmount'),
+    walletDeducted: decimalForExactField(source, 'walletDeductedUnits', 'walletDeducted'),
+    creditUsedAmount: decimalForExactField(source, 'creditUsedAmountUnits', 'creditUsedAmount'),
+});
+
 module.exports = {
     readLegacyAuthoritativeLedger,
     readExactCompatibleLedger,
     serializeExactCompatibleLedger,
+    serializeExactCompatibleUser,
+    serializeExactCompatibleTransaction,
+    serializeExactCompatibleOrder,
 };
