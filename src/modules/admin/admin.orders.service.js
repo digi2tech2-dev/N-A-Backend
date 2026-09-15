@@ -19,10 +19,7 @@ const { createAuditLog } = require('../audit/audit.service');
 const { ADMIN_ACTIONS, ENTITY_TYPES, ACTOR_ROLES } = require('../audit/audit.constants');
 const { HagoFinancialExecutionService } = require('../providers/hago/hagoFinancialExecution.service');
 const { HagoNobilityExecutionService } = require('../providers/hago/hagoNobilityExecution.service');
-const { HagoProviderConnection } = require('../providers/hago/hagoProviderConnection.model');
-const { HagoClient } = require('../providers/hago/hago.client');
 const { InchillFinancialExecutionService } = require('../providers/inchill/inchillFinancialExecution.service');
-const { refundConfirmedPreSendHagoNobilityOrder } = require('../orders/orderFulfillment.service');
 
 const resolveAuditContext = (adminId, auditContext = null) => ({
     actorId: auditContext?.actorId ?? adminId,
@@ -287,62 +284,6 @@ const refundOrder = async (orderId, adminId, remains = 0, auditContext = null) =
     });
 
     return refunded;
-};
-
-// This is not generic UNKNOWN recovery. It accepts only the narrow historical
-// pre-send case where HAGO-BOT proves that no V2 intent was ever persisted for
-// the order's own server-generated mutation key.
-const refundHagoNobilityConfirmedPreSend = async (orderId, adminId, auditContext = null, { hagoClient = new HagoClient() } = {}) => {
-    const ctx = resolveAuditContext(adminId, auditContext);
-    const order = await Order.findById(orderId)
-        .select('+hagoNobility.connectionRef +hagoNobility.providerMutationKey +hagoNobility.providerTransactionId +walletDeductedUnits');
-    if (!order) throw new NotFoundError('Order');
-    if (order.providerCode !== 'hago' || order.hagoNobility?.serviceType !== 'NOBILITY') {
-        throw new BusinessRuleError('This recovery is restricted to Hago Nobility orders.', 'HAGO_NOBILITY_PRE_SEND_RECOVERY_NOT_APPLICABLE');
-    }
-    if (order.status !== ORDER_STATUS.MANUAL_REVIEW || order.hagoNobility?.mutationState !== 'UNKNOWN') {
-        throw new BusinessRuleError('Only unresolved Hago Nobility manual-review orders can use this recovery.', 'HAGO_NOBILITY_PRE_SEND_RECOVERY_INVALID_STATE');
-    }
-    if (order.refunded === true) throw new BusinessRuleError('A refund has already been issued for this order.', 'ALREADY_REFUNDED');
-    if (!order.hagoNobility.providerMutationKey || order.hagoNobility.providerTransactionId) {
-        throw new BusinessRuleError('The order lacks the required no-send recovery evidence shape.', 'HAGO_NOBILITY_PRE_SEND_RECOVERY_EVIDENCE_INVALID');
-    }
-    if (!order.walletDeductedUnits) {
-        throw new BusinessRuleError('This recovery requires a persisted exact wallet debit snapshot.', 'HAGO_NOBILITY_PRE_SEND_RECOVERY_EXACT_DEBIT_REQUIRED');
-    }
-    const connection = await HagoProviderConnection.findById(order.hagoNobility.connectionRef).select('+connectionId');
-    if (!connection?.connectionId) {
-        throw new BusinessRuleError('The Hago connection evidence is unavailable.', 'HAGO_NOBILITY_PRE_SEND_RECOVERY_CONNECTION_UNAVAILABLE');
-    }
-    let proof;
-    try {
-        proof = await hagoClient.lookupIntentProof(connection.connectionId, order.hagoNobility.providerMutationKey);
-    } catch (_) {
-        throw new BusinessRuleError('Hago intent proof is unavailable.', 'HAGO_NOBILITY_PRE_SEND_RECOVERY_PROOF_UNAVAILABLE');
-    }
-    if (proof?.status !== 'SUCCESS' || typeof proof.exists !== 'boolean' || typeof proof.hasProviderTransactionRef !== 'boolean') {
-        throw new BusinessRuleError('Hago intent proof is unavailable.', 'HAGO_NOBILITY_PRE_SEND_RECOVERY_PROOF_UNAVAILABLE');
-    }
-    if (proof.exists || proof.hasProviderTransactionRef) {
-        throw new BusinessRuleError('Hago has persisted mutation evidence; this order must remain under reconciliation.', 'HAGO_NOBILITY_PRE_SEND_RECOVERY_INTENT_EXISTS');
-    }
-    const recovered = await refundConfirmedPreSendHagoNobilityOrder(order);
-    if (!recovered) {
-        const latest = await Order.findById(orderId).select('refunded');
-        if (latest?.refunded) throw new BusinessRuleError('A refund has already been issued for this order.', 'ALREADY_REFUNDED');
-        throw new BusinessRuleError('The order changed while recovery was being confirmed.', 'HAGO_NOBILITY_PRE_SEND_RECOVERY_CONFLICT');
-    }
-    createAuditLog({
-        actorId: ctx.actorId,
-        actorRole: ctx.actorRole,
-        action: ADMIN_ACTIONS.ORDER_REFUNDED,
-        entityType: ENTITY_TYPES.ORDER,
-        entityId: recovered._id,
-        metadata: { recovery: 'confirmed pre-send: no HAGO intent existed for persisted mutation key' },
-        ipAddress: ctx.ipAddress,
-        userAgent: ctx.userAgent,
-    });
-    return recovered;
 };
 
 // ─── Sync Order Provider Status ───────────────────────────────────────────────
@@ -643,4 +584,4 @@ const reconcileInchillFinancialOrder = async (orderId, adminId, auditContext = n
     return result;
 };
 
-module.exports = { listOrders, getOrderById, retryOrder, refundOrder, refundHagoNobilityConfirmedPreSend, syncOrderProviderStatus, completeOrder, updateOrderStatus, reconcileHagoFinancialOrder, reconcileInchillFinancialOrder };
+module.exports = { listOrders, getOrderById, retryOrder, refundOrder, syncOrderProviderStatus, completeOrder, updateOrderStatus, reconcileHagoFinancialOrder, reconcileInchillFinancialOrder };

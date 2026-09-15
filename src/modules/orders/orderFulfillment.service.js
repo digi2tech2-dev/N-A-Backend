@@ -83,67 +83,6 @@ const refundExactFailedOrder = async (order) => {
     }
 };
 
-// This is intentionally narrower than the ordinary unresolved-Hago guard.
-// It is available only after the administrator recovery service has obtained
-// an authoritative HAGO-BOT proof that no intent exists for this exact
-// persisted key. The complete terminal transition and exact wallet refund
-// commit together, so a wallet credit can never leave an executable order.
-const refundConfirmedPreSendHagoNobilityOrder = async (order) => {
-    const session = await mongoose.startSession();
-    try {
-        session.startTransaction({ readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
-        const now = new Date();
-        const recovered = await Order.findOneAndUpdate(
-            {
-                _id: order._id,
-                providerCode: 'hago',
-                status: ORDER_STATUS.MANUAL_REVIEW,
-                refunded: false,
-                'hagoNobility.serviceType': 'NOBILITY',
-                'hagoNobility.mutationState': 'UNKNOWN',
-                'hagoNobility.providerTransactionId': null,
-                'hagoNobility.providerMutationKey': { $type: 'string', $ne: '' },
-                walletDeductedUnits: { $type: 'string', $ne: '' },
-            },
-            {
-                $set: {
-                    status: ORDER_STATUS.FAILED,
-                    failedAt: now,
-                    refunded: true,
-                    refundedAt: now,
-                    providerStatus: 'NOT_SENT',
-                    'hagoNobility.mutationState': 'FAILED',
-                    'hagoNobility.providerStatus': 'NOT_SENT',
-                    'hagoNobility.providerCode': 'CONFIRMED_PRE_SEND_NO_INTENT',
-                    'hagoNobility.outcomeAt': now,
-                },
-            },
-            { new: true, session }
-        ).select('+walletDeductedUnits');
-        if (!recovered) {
-            await session.abortTransaction();
-            return null;
-        }
-        await refundExactWalletAtomic({
-            userId: recovered.userId,
-            units: recovered.walletDeductedUnits,
-            reference: recovered._id,
-            sourceType: 'ORDER',
-            sourceId: recovered._id,
-            sourceKey: `exact-order-refund:${recovered._id}`,
-            description: `Confirmed pre-send refund: Hago Nobility order ${recovered.orderNumber || recovered._id}`,
-            session,
-        });
-        await session.commitTransaction();
-        return recovered;
-    } catch (error) {
-        if (session.inTransaction()) await session.abortTransaction();
-        throw error;
-    } finally {
-        await session.endSession();
-    }
-};
-
 // ─────────────────────────────────────────────────────────────────────────────
 // IDEMPOTENT REFUND
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1318,7 +1257,6 @@ const pollProcessingOrders = async (providerOverride = null) => {
 module.exports = {
     executeOrder,
     refundFailedOrder,
-    refundConfirmedPreSendHagoNobilityOrder,
     processOrderStatusResult,
     pollProcessingOrders,
     moveOrdersToManualReview,

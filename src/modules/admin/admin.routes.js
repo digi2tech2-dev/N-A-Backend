@@ -309,7 +309,6 @@ router.delete('/providers/:id', adminOnly, requirePermission('MANAGE_SUPPLIERS')
 router.get('/orders', requirePermission('MANAGE_ORDERS'), validateQuery(schemas.listOrdersQuery), ordersCtrl.listOrders);
 router.post('/orders/:id/retry', requirePermission('CONFIRM_ORDERS'), ordersCtrl.retryOrder);
 router.post('/orders/:id/refund', requirePermission('CONFIRM_ORDERS'), ordersCtrl.refundOrder);
-router.post('/orders/:id/hago/pre-send-refund', adminOnly, requirePermission('CONFIRM_ORDERS'), ordersCtrl.refundHagoNobilityConfirmedPreSend);
 router.post('/orders/:id/sync-status', requirePermission('CONFIRM_ORDERS'), ordersCtrl.syncOrderProviderStatus);
 router.post('/orders/:id/hago/reconcile', requirePermission('CONFIRM_ORDERS'), ordersCtrl.reconcileHagoFinancialOrder);
 router.post('/orders/:id/inchill/reconcile', requirePermission('CONFIRM_ORDERS'), ordersCtrl.reconcileInchillFinancialOrder);

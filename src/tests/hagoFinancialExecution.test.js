@@ -88,18 +88,6 @@ describe('Hago V2 controlled Diamond/Crystal client contract', () => {
         expect(httpClient.post.mock.calls[0][2].headers).not.toHaveProperty('x-internal-api-key');
     });
 
-    it('uses the exact key only in the authenticated header for read-only intent proof', async () => {
-        const httpClient = makeHttpClient();
-        httpClient.post.mockResolvedValue({ status: 200, data: { status: 'SUCCESS', exists: false, hasProviderTransactionRef: false } });
-        const client = new HagoClient({ apiKey: 'server-only-key', httpClient });
-        await expect(client.lookupIntentProof('con_safe', 'hago:nobility:order-1')).resolves.toEqual({ status: 'SUCCESS', exists: false, hasProviderTransactionRef: false });
-        expect(httpClient.post).toHaveBeenCalledWith(
-            '/api/v2/connections/con_safe/transactions/intent-proof',
-            {},
-            { headers: { 'x-client-api-key': 'server-only-key', 'Idempotency-Key': 'hago:nobility:order-1' } }
-        );
-    });
-
     it.each([502, 503, 504])('keeps a %i response sanitized for UNKNOWN classification', async (statusCode) => {
         const httpClient = makeHttpClient();
         httpClient.post.mockRejectedValue({ response: { status: statusCode, data: { status: 'ERROR', transaction: { status: 'UNKNOWN', upstreamStatus: 'UNKNOWN' }, headers: { authorization: 'secret' } } } });
