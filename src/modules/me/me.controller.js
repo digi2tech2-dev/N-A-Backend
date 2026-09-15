@@ -303,7 +303,6 @@ const placeOrder = catchAsync(async (req, res) => {
         dynamicFields,
         link,
         target,
-        hagoNobility,
     } = req.body;
 
     // Merge top-level link/target into orderFieldsValues so they always
@@ -330,11 +329,6 @@ const placeOrder = catchAsync(async (req, res) => {
         quantity: parseInt(quantity, 10) || 1,
         idempotencyKey: req.headers['idempotency-key'] || null,
         orderFieldsValues: finalFields,
-        // The browser may carry only the opaque quote reference and requested
-        // target. The checkout service resolves all financial and provider
-        // details from the server-owned quote.
-        hagoNobilityQuoteRef: hagoNobility?.quoteRef,
-        hagoNobilityTargetId: hagoNobility?.targetId,
         auditContext,
     });
 

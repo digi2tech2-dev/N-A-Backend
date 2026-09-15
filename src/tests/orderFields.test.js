@@ -49,8 +49,7 @@ const mongoose = require('mongoose');
 const { Product, FIELD_TYPES } = require('../modules/products/product.model');
 const { Order } = require('../modules/orders/order.model');
 const { validateOrderFields } = require('../modules/orders/orderFields.validator');
-const orderService = require('../modules/orders/order.service');
-const { createOrder } = orderService;
+const { createOrder } = require('../modules/orders/order.service');
 const { productFieldVerificationService } = require('../modules/products/productFieldVerification.service');
 const meController = require('../modules/me/me.controller');
 const productService = require('../modules/products/product.service');
@@ -419,43 +418,6 @@ describe('[3] Order creation — orderFields integration', () => {
         expect(response.statusCode).toBe(201);
         expect(response.body.data.customerInput.values.player_id).toBe('player-777');
         expect(response.body.data.customerInput.values.server).toBe('EU');
-    });
-
-    it('/me/orders forwards only the opaque Hago Nobility quote reference and target to checkout', async () => {
-        const createOrderSpy = jest.spyOn(orderService, 'createOrder').mockResolvedValueOnce({
-            order: { _id: new mongoose.Types.ObjectId(), status: 'PROCESSING' },
-            idempotent: false,
-        });
-
-        try {
-            const response = await placeMeOrder({
-                customer,
-                body: {
-                    productId: new mongoose.Types.ObjectId().toString(),
-                    quantity: 1,
-                    hagoNobility: {
-                        quoteRef: 'server-issued-quote-ref',
-                        targetId: '365200654',
-                        operation: 'PURCHASE',
-                        finalPrice: '0.01',
-                        providerDiamondCost: '999999',
-                    },
-                },
-            });
-
-            expect(response.statusCode).toBe(201);
-            expect(createOrderSpy).toHaveBeenCalledWith(expect.objectContaining({
-                hagoNobilityQuoteRef: 'server-issued-quote-ref',
-                hagoNobilityTargetId: '365200654',
-            }));
-            const checkoutInput = createOrderSpy.mock.calls[0][0];
-            expect(checkoutInput).not.toHaveProperty('hagoNobility');
-            expect(checkoutInput).not.toHaveProperty('operation');
-            expect(checkoutInput).not.toHaveProperty('finalPrice');
-            expect(checkoutInput).not.toHaveProperty('providerDiamondCost');
-        } finally {
-            createOrderSpy.mockRestore();
-        }
     });
 
     it('/me/orders accepts dynamicFields alias when orderFieldsValues is missing', async () => {

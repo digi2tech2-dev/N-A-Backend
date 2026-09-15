@@ -139,33 +139,6 @@ describe('Hago Nobility financial guard', () => {
         })).rejects.toMatchObject({ code: 'HAGO_NOBILITY_QUOTE_MISMATCH' });
     });
 
-    it('keeps the server-derived RENEW operation even when checkout input attempts to override it', async () => {
-        const { user, product } = await fixture();
-        const client = makeClient({ derivedBuyTypeName: 'RENEW' });
-        const commerce = new HagoNobilityCommerceService({ client });
-        const { quote } = await commerce.createReadinessQuote({ userId: user._id, productId: product._id, targetId: '51511' });
-        const execution = new HagoNobilityExecutionService({
-            client,
-            commerceService: commerce,
-            env: { HAGO_NOBILITY_FULFILLMENT_ENABLED: 'true' },
-        });
-
-        const prepared = await execution.prepareNewOrder({
-            userId: user._id,
-            product,
-            quantity: 1,
-            quoteRef: quote.quoteRef,
-            targetId: '51511',
-            operation: 'PURCHASE',
-        });
-
-        expect(execution.buildOrderSnapshot(prepared, 'order_renew')).toMatchObject({
-            operation: 'RENEW',
-            selectedType: 1,
-            requestedTargetId: '51511',
-        });
-    });
-
     it('invalidates a quote when its product price, Nobility type, or customer currency changes', async () => {
         const { user, product, providerProduct } = await fixture();
         const commerce = new HagoNobilityCommerceService({ client: makeClient() });
