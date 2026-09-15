@@ -3,6 +3,7 @@
 const { Provider } = require('../provider.model');
 const { InchillProviderConnection, INCHILL_CONNECTION_STATUS } = require('./inchillProviderConnection.model');
 const { InchillClient, InchillClientError } = require('./inchill.client');
+const { INCHILL_SESSION_VALIDATION_STATUS, normalizeInchillSessionValidationStatus } = require('./inchillSessionValidation');
 const { AppError, BusinessRuleError, NotFoundError, ValidationError } = require('../../../shared/errors/AppError');
 
 const OTP_TTL_MS = 10 * 60 * 1000;
@@ -50,10 +51,10 @@ class InchillConnectionService {
             throw this._safe(error, 'session validation');
         }
 
-        const upstreamStatus = String(result.data?.session?.status ?? 'UNKNOWN').toUpperCase();
+        const upstreamStatus = normalizeInchillSessionValidationStatus(result);
         const validatedAt = this.now();
-        const isValid = ['VALID', 'CONNECTED'].includes(upstreamStatus);
-        const requiresReauth = ['REJECTED', 'REAUTH_REQUIRED'].includes(upstreamStatus);
+        const isValid = upstreamStatus === INCHILL_SESSION_VALIDATION_STATUS.VALID;
+        const requiresReauth = upstreamStatus === INCHILL_SESSION_VALIDATION_STATUS.REJECTED;
 
         connection.lastValidatedAt = validatedAt;
         if (isValid) {

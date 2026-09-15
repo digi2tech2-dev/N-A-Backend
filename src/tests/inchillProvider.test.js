@@ -8,6 +8,7 @@ const { Order, ORDER_STATUS } = require('../modules/orders/order.model');
 const { InchillProviderConnection } = require('../modules/providers/inchill/inchillProviderConnection.model');
 const { InchillFinancialExecutionService } = require('../modules/providers/inchill/inchillFinancialExecution.service');
 const { InchillConnectionService } = require('../modules/providers/inchill/inchillConnection.service');
+const { INCHILL_SESSION_VALIDATION_STATUS, normalizeInchillSessionValidationStatus } = require('../modules/providers/inchill/inchillSessionValidation');
 const { createOrder } = require('../modules/orders/order.service');
 const { inchillPreflightValidation } = require('../modules/products/product.validation');
 const validate = require('../shared/middlewares/validate');
@@ -143,6 +144,21 @@ describe('Inchill V1 server-side client contract', () => {
     });
 });
 
+describe('Inchill session-validation contract normalization', () => {
+    it.each([
+        [{ data: { status: 'SUCCESS' } }, INCHILL_SESSION_VALIDATION_STATUS.VALID],
+        [{ data: { session: { status: 'VALID' } } }, INCHILL_SESSION_VALIDATION_STATUS.VALID],
+        [{ data: { session: { status: 'CONNECTED' } } }, INCHILL_SESSION_VALIDATION_STATUS.VALID],
+        [{ data: { session: { status: 'REJECTED' } } }, INCHILL_SESSION_VALIDATION_STATUS.REJECTED],
+        [{ data: { session: { status: 'REAUTH_REQUIRED' } } }, INCHILL_SESSION_VALIDATION_STATUS.REJECTED],
+        [{ data: { status: 'UNRECOGNIZED' } }, INCHILL_SESSION_VALIDATION_STATUS.UNKNOWN],
+        [{ data: {} }, INCHILL_SESSION_VALIDATION_STATUS.UNKNOWN],
+        [null, INCHILL_SESSION_VALIDATION_STATUS.UNKNOWN],
+    ])('normalizes %p as %s', (response, expected) => {
+        expect(normalizeInchillSessionValidationStatus(response)).toBe(expected);
+    });
+});
+
 describe('Inchill OTP connection lifecycle', () => {
     const createProvider = () => Provider.create({ name: `Inchill OTP ${Date.now()}-${Math.random()}`, slug: 'inchill', baseUrl: 'https://provider-record.example.invalid', isActive: true, syncInterval: 0 });
     const otpRequest = { phone: '+201234567890', countryCode: '20', deviceId: 'device-12345', country: 'eg', language: 'ar' };
@@ -224,6 +240,18 @@ describe('Inchill OTP connection lifecycle', () => {
         expect(serialized.connection).toMatchObject({ connectionStatus: 'CONNECTED', lastValidationStatus: 'VALID', hasConnection: true });
     });
 
+    it('persists the published sanitized top-level SUCCESS response as CONNECTED', async () => {
+        const provider = await createProvider();
+        await InchillProviderConnection.create({ provider: provider._id, agentPhone: '+201234567890', isPrimary: true, enabled: true, connectionStatus: 'UNKNOWN' });
+        const service = new InchillConnectionService({ client: { validateSession: jest.fn().mockResolvedValue({ data: { status: 'SUCCESS' } }) } });
+
+        const result = await service.validateSession(provider._id);
+        const stored = await InchillProviderConnection.findOne({ provider: provider._id });
+
+        expect(result).toMatchObject({ session: { status: 'VALID' }, connection: { connectionStatus: 'CONNECTED', lastValidationStatus: 'VALID' } });
+        expect(stored).toMatchObject({ connectionStatus: 'CONNECTED', lastValidationStatus: 'VALID' });
+    });
+
     it('persists an authoritative reauthentication result without treating it as a connected session', async () => {
         const provider = await createProvider();
         await InchillProviderConnection.create({ provider: provider._id, agentPhone: '+201234567890', isPrimary: true, enabled: true, connectionStatus: 'UNKNOWN' });
@@ -292,6 +320,26 @@ describe('Inchill customer checkout contract', () => {
         expect(prepared).toMatchObject({ targetId: '376756346', providerAmount: 10 });
         expect(client.verifyTarget).toHaveBeenCalledWith('+201234567890', '376756346');
         expect(rechargeDiamond).not.toHaveBeenCalled();
+    });
+
+    it('accepts the published top-level SUCCESS session response before financial checkout preflight', async () => {
+        const { provider, product } = await publishedDiamondFixture();
+        await InchillProviderConnection.create({ provider: provider._id, agentPhone: '+201234567890', isPrimary: true, enabled: true });
+        const client = {
+            validateSession: jest.fn().mockResolvedValue({ data: { status: 'SUCCESS' } }),
+            verifyTarget: jest.fn().mockResolvedValue({ data: { userInfo: { vid: '376756346' } } }),
+            rechargePreflight: jest.fn().mockResolvedValue({ data: { preflight: { readOnly: true, mutationAttempted: false, session: 'VALID', targetResolved: true, serviceType: 'DIAMOND', walletSufficient: true, target: { vid: '376756346' }, amount: 10 } } }),
+            rechargeDiamond: jest.fn(),
+        };
+
+        await expect(new InchillFinancialExecutionService({ client }).prepareNewOrder({
+            product,
+            quantity: 10,
+            customerInput: { values: { player_id: '376756346' } },
+        })).resolves.toMatchObject({ targetId: '376756346', providerAmount: 10 });
+        expect(client.verifyTarget).toHaveBeenCalledWith('+201234567890', '376756346');
+        expect(client.rechargePreflight).toHaveBeenCalledWith('+201234567890', '376756346', 10);
+        expect(client.rechargeDiamond).not.toHaveBeenCalled();
     });
 
     it('rejects disabled checkout before wallet debit, order creation, or provider mutation', async () => {
