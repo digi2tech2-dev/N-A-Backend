@@ -178,10 +178,10 @@ class HagoClient {
         }
     }
 
-    async _post(path, body, operation) {
+    async _post(path, body, operation, headers = {}) {
         try {
             const response = await this._client.post(path, body, {
-                headers: this._authHeaders(),
+                headers: { ...this._authHeaders(), ...headers },
             });
             return sanitizePayload(response?.data ?? null);
         } catch (error) {
@@ -318,6 +318,15 @@ class HagoClient {
         const body = { transactionId: requireOpaqueId(transactionId, 'transactionId') };
         if (history !== undefined) body.history = sanitizePayload(history);
         return this._post(`/api/v2/connections/${encodeURIComponent(requireOpaqueId(connectionId, 'connectionId'))}/transactions/reconcile`, body, 'transaction reconciliation');
+    }
+
+    lookupIntentProof(connectionId, idempotencyKey) {
+        return this._post(
+            `/api/v2/connections/${encodeURIComponent(requireOpaqueId(connectionId, 'connectionId'))}/transactions/intent-proof`,
+            {},
+            'idempotency intent proof lookup',
+            { 'Idempotency-Key': requireIdempotencyKey(idempotencyKey) }
+        );
     }
 
     diamondRecharge(connectionId, { targetId, amount, idempotencyKey }) {

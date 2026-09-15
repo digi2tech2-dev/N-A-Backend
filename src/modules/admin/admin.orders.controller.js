@@ -49,6 +49,12 @@ const refundOrder = catchAsync(async (req, res) => {
     sendSuccess(res, { order }, 'Order refunded');
 });
 
+// POST /admin/orders/:id/hago/pre-send-refund
+const refundHagoNobilityConfirmedPreSend = catchAsync(async (req, res) => {
+    const order = await svc.refundHagoNobilityConfirmedPreSend(req.params.id, req.user._id, resolveAuditContext(req));
+    sendSuccess(res, { order }, 'Hago Nobility pre-send order refunded');
+});
+
 // POST /admin/orders/:id/sync-status
 const syncOrderProviderStatus = catchAsync(async (req, res) => {
     const order = await svc.syncOrderProviderStatus(req.params.id, req.user._id, resolveAuditContext(req));
@@ -92,4 +98,4 @@ const updateStatus = catchAsync(async (req, res) => {
     sendSuccess(res, { order }, `Order status updated to ${order.status}.`);
 });
 
-module.exports = { listOrders, getOrderById, retryOrder, refundOrder, syncOrderProviderStatus, completeOrder, reconcileHagoFinancialOrder, reconcileInchillFinancialOrder, updateStatus };
+module.exports = { listOrders, getOrderById, retryOrder, refundOrder, refundHagoNobilityConfirmedPreSend, syncOrderProviderStatus, completeOrder, reconcileHagoFinancialOrder, reconcileInchillFinancialOrder, updateStatus };
