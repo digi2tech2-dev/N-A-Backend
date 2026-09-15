@@ -403,6 +403,30 @@ const remapOrderFieldsInputByAliases = (orderFields = [], submittedValues = {}) 
     return remapped;
 };
 
+// Nobility checkout uses a short-lived, server-owned quote as its sole target
+// authority. If this product retains the canonical Hago target_uid order field,
+// hydrate it only after the quote has been bound to the user, product, and VID.
+// A browser-provided value may agree with the quote, but can never replace it.
+const bindHagoNobilityQuoteTarget = ({ product, values, hagoNobility }) => {
+    const fields = Array.isArray(product?.orderFields) ? product.orderFields : [];
+    const hasActiveCanonicalTarget = fields.some((field) => (
+        field?.isActive !== false && String(field?.key ?? '').trim() === 'target_uid'
+    ));
+    if (!hasActiveCanonicalTarget) return values;
+
+    const quoteTargetId = String(hagoNobility?.quote?.targetId ?? '').trim();
+    if (!quoteTargetId) {
+        throw new BusinessRuleError('This Hago Nobility quote does not match the requested checkout.', 'HAGO_NOBILITY_QUOTE_MISMATCH');
+    }
+
+    const submittedTarget = values?.target_uid;
+    if (submittedTarget !== undefined && String(submittedTarget ?? '').trim() !== quoteTargetId) {
+        throw new BusinessRuleError('This Hago Nobility quote does not match the requested checkout.', 'HAGO_NOBILITY_QUOTE_MISMATCH');
+    }
+
+    return { ...values, target_uid: quoteTargetId };
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // JIT PRICE AUTO-UPDATE HELPER
 // ─────────────────────────────────────────────────────────────────────────────
@@ -641,10 +665,13 @@ const _attemptCreateOrder = async (
         );
 
         if (product.orderFields && product.orderFields.length > 0) {
-            const normalizedFieldValues = remapOrderFieldsInputByAliases(
+            let normalizedFieldValues = remapOrderFieldsInputByAliases(
                 product.orderFields,
                 orderFieldsValues
             );
+            normalizedFieldValues = hagoNobility
+                ? bindHagoNobilityQuoteTarget({ product, values: normalizedFieldValues, hagoNobility })
+                : normalizedFieldValues;
             // validateOrderFields throws BusinessRuleError on invalid input
             const { values, fieldsSnapshot } = validateOrderFields(
                 product.orderFields,
