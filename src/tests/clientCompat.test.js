@@ -1,5 +1,9 @@
 'use strict';
 
+process.env.SAFE_LOCAL_PRODUCTION_MODE = 'true';
+process.env.BACKGROUND_JOBS_ENABLED = 'false';
+process.env.WHATSAPP_AUTO_INIT = 'false';
+
 const http = require('http');
 
 const {
@@ -13,7 +17,9 @@ const {
     USER_STATUS,
 } = require('./testHelpers');
 const { Category } = require('../modules/categories/category.model');
+const { Product } = require('../modules/products/product.model');
 const { Order, ORDER_STATUS } = require('../modules/orders/order.model');
+const { Counter } = require('../modules/orders/counter.model');
 const { mapProduct } = require('../modules/clientCompat/clientCompat.mappers');
 
 let app;
@@ -47,6 +53,22 @@ const rawGet = (path, headers = {}) => new Promise((resolve, reject) => {
 
     req.on('error', reject);
     req.end();
+});
+
+const rawPost = (path, payload, headers = {}) => new Promise((resolve, reject) => {
+    const url = new URL(path, baseUrl);
+    const body = JSON.stringify(payload);
+    const req = http.request(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body), ...headers },
+    }, (res) => {
+        let response = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => { response += chunk; });
+        res.on('end', () => resolve({ status: res.statusCode, body: response ? JSON.parse(response) : null }));
+    });
+    req.on('error', reject);
+    req.end(body);
 });
 
 const authHeaders = (token, header = 'api-token') => {
@@ -234,6 +256,24 @@ describe('Client compatibility API authentication and profile', () => {
 });
 
 describe('Client compatibility API products and content', () => {
+    test('compatibility reads never allocate IDs for historical sparse records', async () => {
+        const { token } = await createApiReseller({ token: 'read-only-compat-token' });
+        const category = await createCompatCategory();
+        const product = await createCompatProduct({ category: category._id.toString() });
+        await Category.updateOne({ _id: category._id }, { $unset: { compatCategoryId: 1 } });
+        await Product.updateOne({ _id: product._id }, { $unset: { compatProductId: 1 } });
+        const before = await Counter.find({ _id: { $in: ['compatCategoryId', 'compatProductId'] } }).lean();
+
+        expect((await rawGet('/client/api/products', authHeaders(token))).status).toBe(200);
+        expect((await rawGet('/client/api/content/0', authHeaders(token))).status).toBe(200);
+        expect((await rawGet('/client/api/check?orders=ID_missing', authHeaders(token))).status).toBe(200);
+
+        expect((await Product.findById(product._id).lean()).compatProductId).toBeUndefined();
+        expect((await Category.findById(category._id).lean()).compatCategoryId).toBeUndefined();
+        const after = await Counter.find({ _id: { $in: ['compatCategoryId', 'compatProductId'] } }).lean();
+        expect(after).toEqual(before);
+    });
+
     test('lists, filters, and minimizes products with numeric compatibility IDs', async () => {
         const { token } = await createApiReseller({ token: 'products-token' });
         const category = await createCompatCategory({
@@ -269,6 +309,9 @@ describe('Client compatibility API products and content', () => {
         expect(mappedPackage.provider_price).toBe(10);
         expectNumericPriceFields(mappedPackage, { price: 10, basePrice: 10 });
         expect(mappedPackage.params).toEqual(['Player ID']);
+        expect(mappedPackage.fields).toEqual([expect.objectContaining({
+            key: 'player_id', label: 'Player ID', type: 'text', required: true,
+        })]);
         expect(mappedPackage.category_name).toBe('PUBG Global ID UC');
         expect(mappedPackage.available).toBe(true);
         expect(mappedPackage.qty_values).toBeNull();
@@ -661,7 +704,7 @@ describe('Client compatibility API orders', () => {
             authHeaders(token)
         );
         expect(res.status).toBe(400);
-        expect(res.body.code).toBe(123);
+        expect(res.body.code).toBe(124);
 
         res = await rawGet(
             `/client/api/newOrder/${product.compatProductId}/params?qty=nope&order_uuid=bad-qty`,
@@ -764,5 +807,33 @@ describe('Client compatibility API orders', () => {
             status: 'OK',
             data: [],
         });
+    });
+});
+
+describe('Canonical POST orders', () => {
+    test('uses params object and the existing idempotency/wallet flow exactly once', async () => {
+        const { reseller, token } = await createApiReseller({ token: 'canonical-post-token' });
+        const product = await createCompatProduct({ name: 'Canonical POST product' });
+        const body = {
+            product_id: product.compatProductId,
+            qty: 1,
+            order_uuid: 'canonical-post-idempotency-key',
+            params: { player_id: '12345' },
+            price: 0,
+            currency: 'EUR',
+        };
+        const first = await rawPost('/client/api/orders', body, authHeaders(token));
+        expect(first.status).toBe(200);
+        expect(first.body.status).toBe('OK');
+        expect(first.body.data.order_uuid).toBe(body.order_uuid);
+        const replay = await rawPost('/client/api/orders', body, authHeaders(token));
+        expect(replay.status).toBe(200);
+        expect(replay.body.data.order_id).toBe(first.body.data.order_id);
+        expect((await freshUser(reseller._id)).walletBalance).toBe(90);
+        expect(await countTransactions(reseller._id)).toBe(1);
+
+        const invalid = await rawPost('/client/api/orders', { ...body, order_uuid: 'bad-params', params: [] }, authHeaders(token));
+        expect(invalid.status).toBe(400);
+        expect(invalid.body.code).toBe(124);
     });
 });

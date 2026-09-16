@@ -36,6 +36,15 @@ const providerSchema = new mongoose.Schema(
             lowercase: true,
         },
 
+        // Explicit adapter selection is additive. Legacy providers continue to
+        // resolve by slug/name when this is absent.
+        adapterType: {
+            type: String,
+            trim: true,
+            lowercase: true,
+            default: null,
+        },
+
         /**
          * Base URL of the provider's API.
          * The adapter uses this as the root for all HTTP calls.
@@ -121,6 +130,7 @@ providerSchema.pre('save', function (next) {
             .replace(/[^a-z0-9]+/g, '-')
             .replace(/^-+|-+$/g, '');
     }
+    if (this.adapterType) this.adapterType = String(this.adapterType).trim().toLowerCase() || null;
     next();
 });
 

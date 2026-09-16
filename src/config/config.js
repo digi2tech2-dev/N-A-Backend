@@ -27,6 +27,10 @@ const DEFAULT_RECEIPT_OCR_KEYWORDS = [
 const config = {
     env: process.env.NODE_ENV || 'development',
     port: parseInt(process.env.PORT, 10) || 5000,
+    // Only the literal lowercase value "true" enables this isolation mode.
+    safeLocalProductionMode: process.env.SAFE_LOCAL_PRODUCTION_MODE === 'true',
+    backgroundJobsEnabled: process.env.BACKGROUND_JOBS_ENABLED !== 'false',
+    whatsappAutoInit: process.env.WHATSAPP_AUTO_INIT !== 'false',
 
     db: {
         uri: process.env.MONGO_URI,

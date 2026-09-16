@@ -1,6 +1,7 @@
 'use strict';
 
 const { getActiveTokensForUser, deactivateTokens } = require('./deviceToken.service');
+const config = require('../../config/config');
 
 const INVALID_TOKEN_CODES = new Set([
     'messaging/invalid-registration-token',
@@ -59,6 +60,7 @@ const chunk = (items, size) => {
 };
 
 const sendPushToUser = async ({ userId, payload }) => {
+    if (config.safeLocalProductionMode) return { enabled: false, sent: 0, failed: 0, invalidTokens: 0 };
     const client = getMessagingClient();
     if (!client) return { enabled: false, sent: 0, failed: 0, invalidTokens: 0 };
 

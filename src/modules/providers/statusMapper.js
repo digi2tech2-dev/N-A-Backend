@@ -73,6 +73,7 @@ const _MAP = {
     wait:      ORDER_STATUS.PROCESSING,
     waiting:   ORDER_STATUS.PROCESSING,
     awaiting:  ORDER_STATUS.PROCESSING,
+    placement_uncertain: ORDER_STATUS.PROCESSING,
     new:       ORDER_STATUS.PROCESSING,
     created:   ORDER_STATUS.PROCESSING,
 

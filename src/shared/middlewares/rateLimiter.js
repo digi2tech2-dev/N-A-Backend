@@ -59,4 +59,14 @@ const walletLimiter = rateLimit({
     },
 });
 
-module.exports = { apiLimiter, authLimiter, walletLimiter };
+const compatApiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 1000,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (_req, res) => res.status(429).json({
+        status: 'ERROR', code: 111, message: 'Try again later',
+    }),
+});
+
+module.exports = { apiLimiter, authLimiter, walletLimiter, compatApiLimiter };

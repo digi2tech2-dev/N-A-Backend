@@ -7,7 +7,6 @@ const { Order } = require('../orders/order.model');
 const orderService = require('../orders/order.service');
 const { calculateFinalPrice } = require('../orders/pricing.service');
 const { convertUsdToUserCurrency } = require('../../services/currencyConverter.service');
-const { getNextSequence } = require('../orders/counter.model');
 const { ClientCompatError, ERROR_CODES } = require('./clientCompat.errors');
 const {
     getActiveFields,
@@ -66,79 +65,7 @@ const getProfile = async (reseller) => {
     };
 };
 
-const ensureProductCompatId = async (product) => {
-    if (product.compatProductId) return product.compatProductId;
-
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-        const nextId = await getNextSequence('compatProductId', 999);
-        try {
-            const updated = await Product.findOneAndUpdate(
-                {
-                    _id: product._id,
-                    $or: [
-                        { compatProductId: null },
-                        { compatProductId: { $exists: false } },
-                    ],
-                },
-                { $set: { compatProductId: nextId } },
-                { new: true, lean: true }
-            );
-            if (updated?.compatProductId) return updated.compatProductId;
-
-            const existing = await Product.findById(product._id).select('compatProductId').lean();
-            if (existing?.compatProductId) return existing.compatProductId;
-        } catch (err) {
-            if (err.code !== 11000) throw err;
-        }
-    }
-
-    throw new ClientCompatError('Unable to assign product compatibility ID', ERROR_CODES.INTERNAL, 500);
-};
-
-const ensureCategoryCompatId = async (category) => {
-    if (!category || category.compatCategoryId) return category?.compatCategoryId || 0;
-
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-        const nextId = await getNextSequence('compatCategoryId', 1);
-        try {
-            const updated = await Category.findOneAndUpdate(
-                {
-                    _id: category._id,
-                    $or: [
-                        { compatCategoryId: null },
-                        { compatCategoryId: { $exists: false } },
-                    ],
-                },
-                { $set: { compatCategoryId: nextId } },
-                { new: true, lean: true }
-            );
-            if (updated?.compatCategoryId) return updated.compatCategoryId;
-
-            const existing = await Category.findById(category._id).select('compatCategoryId').lean();
-            if (existing?.compatCategoryId) return existing.compatCategoryId;
-        } catch (err) {
-            if (err.code !== 11000) throw err;
-        }
-    }
-
-    throw new ClientCompatError('Unable to assign category compatibility ID', ERROR_CODES.INTERNAL, 500);
-};
-
-const ensureCompatIds = async (products, categories) => {
-    for (const category of categories) {
-        if (!category.compatCategoryId) {
-            category.compatCategoryId = await ensureCategoryCompatId(category);
-        }
-    }
-
-    for (const product of products) {
-        if (!product.compatProductId) {
-            product.compatProductId = await ensureProductCompatId(product);
-        }
-    }
-};
-
-const loadCategories = async () => Category.find({ isActive: true })
+const loadCategories = async () => Category.find({ isActive: true, compatCategoryId: { $ne: null } })
     .sort({ sortOrder: 1, name: 1 })
     .lean();
 
@@ -188,11 +115,11 @@ const listProducts = async (reseller, { productsId = '', base = false } = {}) =>
         loadCategories(),
     ]);
 
-    await ensureCompatIds(products, categories);
     const { byId: categoryById } = buildCategoryMaps(categories);
 
     const mapped = [];
     for (const product of products) {
+        if (!product.compatProductId) continue;
         const category = getCategoryForProduct(product, categoryById);
         const priced = await priceProduct(product, reseller);
         mapped.push(mapProduct({
@@ -230,7 +157,6 @@ const getContent = async (reseller, parentId) => {
         loadCategories(),
     ]);
 
-    await ensureCompatIds(allProducts, categories);
     const { byId: categoryById, byCompatId: categoryByCompatId } = buildCategoryMaps(categories);
     const parentCategory = numericParentId === 0 ? null : categoryByCompatId.get(numericParentId) || null;
     const parentMongoId = parentCategory ? String(parentCategory._id) : null;
@@ -247,6 +173,7 @@ const getContent = async (reseller, parentId) => {
 
     const products = [];
     for (const product of allProducts) {
+        if (!product.compatProductId) continue;
         const productCategoryId = String(product.category || '').trim();
         const include = numericParentId === 0
             ? !productCategoryId
@@ -408,6 +335,43 @@ const placeOrder = async (reseller, compatProductId, query, auditContext) => {
     };
 };
 
+const placeCanonicalOrder = async (reseller, body, auditContext) => {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+        throw new ClientCompatError('Validation error', ERROR_CODES.VALIDATION, 400);
+    }
+    const productId = body.product_id;
+    const quantity = Number(body.qty);
+    const idempotencyKey = String(body.order_uuid || '').trim();
+    const params = body.params === undefined ? {} : body.params;
+
+    if (!Number.isInteger(Number(productId)) || Number(productId) <= 0 || !Number.isInteger(quantity) || quantity <= 0 || !idempotencyKey) {
+        throw new ClientCompatError('Validation error', ERROR_CODES.VALIDATION, 400);
+    }
+    if (!params || typeof params !== 'object' || Array.isArray(params)) {
+        throw new ClientCompatError('params must be an object', ERROR_CODES.VALIDATION, 400);
+    }
+
+    const product = await findProductByCompatId(productId);
+    if (quantity < Number(product.minQty || 1)) {
+        throw new ClientCompatError('Quantity is too small', ERROR_CODES.QUANTITY_TOO_SMALL, 400);
+    }
+    if (quantity > Number(product.maxQty || quantity)) {
+        throw new ClientCompatError('Quantity is too large', ERROR_CODES.QUANTITY_TOO_LARGE, 400);
+    }
+
+    const { order } = await orderService.createOrder({
+        userId: reseller._id,
+        productId: product._id,
+        quantity,
+        idempotencyKey,
+        orderFieldsValues: normalizeOrderFieldsForProduct(product, params),
+        auditContext,
+    });
+    await ensureCompatOrderId(order);
+    const freshOrder = await populateOrderForCompat(order._id);
+    return { status: 'OK', data: mapCreatedOrder(freshOrder) };
+};
+
 const listOrders = async (reseller, ids, { byUuid = false } = {}) => {
     if (!Array.isArray(ids) || ids.length === 0) {
         throw new ClientCompatError('Validation error', ERROR_CODES.VALIDATION, 400);
@@ -427,12 +391,6 @@ const listOrders = async (reseller, ids, { byUuid = false } = {}) => {
         .select(isExactLedgerEnabled() ? '+chargedAmountUnits +walletDeductedUnits +creditUsedAmountUnits' : '')
         .populate('productId', 'name')
         .lean();
-
-    for (const order of orders) {
-        if (!order.compatOrderId) {
-            order.compatOrderId = await ensureCompatOrderId(order._id);
-        }
-    }
 
     const orderByKey = new Map();
     for (const order of orders) {
@@ -456,8 +414,7 @@ module.exports = {
     listProducts,
     getContent,
     placeOrder,
+    placeCanonicalOrder,
     listOrders,
-    ensureProductCompatId,
-    ensureCategoryCompatId,
     ensureCompatOrderId,
 };

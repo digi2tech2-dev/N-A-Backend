@@ -69,6 +69,18 @@ const mapProductParams = (product = {}) => getActiveFields(product)
     .map((field) => getFieldLabel(field))
     .filter(Boolean);
 
+const mapProductFields = (product = {}) => getActiveFields(product)
+    .map((field) => ({
+        key: getFieldKey(field),
+        label: getFieldLabel(field),
+        type: field.type || 'text',
+        required: field.required !== false,
+        options: Array.isArray(field.options) ? field.options : [],
+        ...(Number.isFinite(Number(field.min)) ? { min: Number(field.min) } : {}),
+        ...(Number.isFinite(Number(field.max)) ? { max: Number(field.max) } : {}),
+    }))
+    .filter((field) => field.key && field.label);
+
 const mapQuantity = (product = {}) => {
     const rawQuantityList = product.qty_values
         ?? product.qtyValues
@@ -168,6 +180,7 @@ const mapProduct = ({ product, category, price, priceUsd, currency = 'USD', mini
         api_price: priceAliases.api_price,
         provider_price: priceAliases.provider_price,
         params: mapProductParams(product),
+        fields: mapProductFields(product),
         category_name: category?.name || '',
         available: product.isActive !== false && !product.deletedAt,
         qty_values: quantity.qty_values,
@@ -204,6 +217,7 @@ const getOrderPrice = (order = {}) => {
 
 const mapCreatedOrder = (order = {}) => ({
     order_id: order.compatOrderId,
+    order_uuid: order.idempotencyKey || null,
     status: mapStatus(order.status),
     price: isExactLedgerEnabled() ? String(getOrderPrice(order)) : toFixedCompatNumber(getOrderPrice(order)),
     data: getOrderData(order),
@@ -212,6 +226,7 @@ const mapCreatedOrder = (order = {}) => ({
 
 const mapCheckedOrder = (order = {}) => ({
     order_id: order.compatOrderId,
+    order_uuid: order.idempotencyKey || null,
     quantity: Number(order.quantity || 0),
     data: getOrderData(order),
     created_at: formatDateTime(order.createdAt),
@@ -297,4 +312,5 @@ module.exports = {
     parseProductIds,
     IGNORED_ORDER_FIELD_KEYS,
     extractOrderFieldsFromQuery,
+    mapProductFields,
 };

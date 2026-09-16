@@ -54,10 +54,11 @@ const updateProvider = async (id, data, adminId) => {
     if (!provider) throw new NotFoundError('Provider');
 
     const before = provider.toObject();
-    const { name, slug, baseUrl, apiToken, isActive, syncInterval, supportedFeatures } = data;
+    const { name, slug, adapterType, baseUrl, apiToken, isActive, syncInterval, supportedFeatures } = data;
 
     if (name !== undefined) provider.name = name;
     if (slug !== undefined) provider.slug = slug;
+    if (adapterType !== undefined) provider.adapterType = adapterType;
     if (baseUrl !== undefined) provider.baseUrl = baseUrl;
     if (apiToken !== undefined) provider.apiToken = apiToken;
     if (isActive !== undefined) provider.isActive = isActive;

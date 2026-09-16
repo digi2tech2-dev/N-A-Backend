@@ -55,6 +55,7 @@ const { TorosfonAdapter } = require('../modules/providers/adapters/toros.adapter
 const { AlkasrVipAdapter } = require('../modules/providers/adapters/alkasr.adapter');
 const { RoyalCrownAdapter } = require('../modules/providers/adapters/royalCrown.adapter');
 const { DealerApiAdapter } = require('../modules/providers/adapters/dealerApi.service');
+const { CanonicalB2BAdapter } = require('../modules/providers/adapters/canonicalB2B.adapter');
 const { getProviderAdapter, registerAdapter } = require('../modules/providers/adapters/adapter.factory');
 const { toInternalStatus, isTerminal, requiresRefund } = require('../modules/providers/statusMapper');
 
@@ -88,6 +89,11 @@ const karakProvider = {
     apiToken: 'karak-secret',
 };
 
+const canonicalProvider = {
+    name: 'Canonical upstream', slug: 'canonical-upstream', adapterType: 'canonical-b2b',
+    baseUrl: 'https://upstream.example/client/api/', apiToken: 'canonical-secret',
+};
+
 // Helper: build adapter with a controlled axios client
 const makeTorosAdapter = (clientOverrides = {}) => {
     const client = makeFakeAxios(clientOverrides);
@@ -109,6 +115,14 @@ const makeDealerAdapter = (provider = karakProvider, clientOverrides = {}) => {
     const client = makeFakeAxios(clientOverrides);
     axios.create.mockReturnValueOnce(client);
     const adapter = new DealerApiAdapter(provider);
+    adapter._client = client;
+    return { adapter, client };
+};
+
+const makeCanonicalAdapter = (clientOverrides = {}) => {
+    const client = makeFakeAxios(clientOverrides);
+    axios.create.mockReturnValueOnce(client);
+    const adapter = new CanonicalB2BAdapter(canonicalProvider);
     adapter._client = client;
     return { adapter, client };
 };
@@ -798,5 +812,48 @@ describe('[9] getBalance()', () => {
         const result = await adapter.getBalance();
         expect(result).toEqual(info);
         expect(client.get).toHaveBeenCalledWith('/client/api/profile');
+    });
+});
+
+describe('[10] CanonicalB2BAdapter', () => {
+    it('keeps the complete Canonical base URL, sends api-token only in headers, and maps USD products', async () => {
+        const { adapter, client } = makeCanonicalAdapter();
+        client.get.mockResolvedValueOnce({ data: [{ id: 1000, name: 'Upstream product', price: 2, currency: 'USD', fields: [{ key: 'player_id' }] }] });
+        const products = await adapter.getProducts();
+        expect(axios.create).toHaveBeenCalledWith(expect.objectContaining({
+            baseURL: 'https://upstream.example/client/api',
+            headers: expect.objectContaining({ 'api-token': 'canonical-secret' }),
+        }));
+        expect(products[0]).toMatchObject({ externalProductId: '1000', minQty: 1, maxQty: 1, isActive: true });
+        expect(products[0].rawPayload.fields).toEqual([{ key: 'player_id' }]);
+    });
+
+    it('rejects explicit non-USD upstream currencies', async () => {
+        const { adapter, client } = makeCanonicalAdapter();
+        client.get.mockResolvedValueOnce({ data: [{ id: 1000, name: 'Unsafe', price: 2, currency: 'EGP' }] });
+        await expect(adapter.getProducts()).rejects.toThrow(/currency EGP is unsupported/);
+    });
+
+    it('uses the persisted reference as order_uuid and filters internal fulfillment metadata', async () => {
+        const { adapter, client } = makeCanonicalAdapter();
+        client.post.mockResolvedValueOnce({ data: { status: 'OK', data: { order_id: 'ID_1', status: 'wait' } } });
+        const result = await adapter.placeOrder({
+            externalProductId: '1000', quantity: 1, referenceId: 'ORD-100', player_id: '123',
+            orderId: 'internal-order', clientReference: 'internal-client', providerIdempotencyKey: 'internal-key', currency: 'EGP', price: 9,
+        });
+        expect(result).toMatchObject({ success: true, providerOrderId: 'ID_1' });
+        expect(client.post).toHaveBeenCalledWith('/orders', {
+            product_id: 1000, qty: 1, order_uuid: 'ORD-100', params: { player_id: '123' },
+        });
+    });
+
+    it('does an immediate UUID lookup after an ambiguous dispatch and preserves unresolved uncertainty', async () => {
+        const { adapter, client } = makeCanonicalAdapter();
+        const timeout = Object.assign(new Error('timeout'), { code: 'ECONNABORTED' });
+        client.post.mockRejectedValueOnce(timeout);
+        client.get.mockResolvedValueOnce({ data: { status: 'OK', data: [] } });
+        const result = await adapter.placeOrder({ externalProductId: '1000', quantity: 1, referenceId: 'ORD-uncertain' });
+        expect(client.get).toHaveBeenCalledWith('/check', { params: { uuids: 'ORD-uncertain' } });
+        expect(result).toMatchObject({ success: true, providerStatus: 'PLACEMENT_UNCERTAIN', outcomeUncertain: true, providerOrderId: null });
     });
 });

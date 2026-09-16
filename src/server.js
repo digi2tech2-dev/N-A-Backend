@@ -31,12 +31,17 @@ const startServer = async () => {
             }
         });
 
-        // 3. Start background cron jobs (skipped in test env)
-        fulfillmentJob.start();    // every 5 minutes — polls PROCESSING order statuses
-        syncProvidersJob.start();  // every 6 hours — syncs provider product catalogues
-        whatsappService.initializeWhatsAppClient().catch((err) => {
-            console.error('[WhatsApp] startup initialization failed:', err.message);
-        });
+        // Safe-local mode is inert. The individual flags also allow a
+        // controlled deployment to opt out of schedulers or WhatsApp startup.
+        if (!config.safeLocalProductionMode && config.backgroundJobsEnabled) {
+            fulfillmentJob.start();
+            syncProvidersJob.start();
+        }
+        if (!config.safeLocalProductionMode && config.whatsappAutoInit) {
+            whatsappService.initializeWhatsAppClient().catch((err) => {
+                console.error('[WhatsApp] startup initialization failed:', err.message);
+            });
+        }
 
         // ── Graceful Shutdown ─────────────────────────────────────────────────────
         const gracefulShutdown = (signal) => {

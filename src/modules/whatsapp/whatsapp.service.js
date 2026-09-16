@@ -4,6 +4,7 @@ const fs = require('fs/promises');
 const fsNative = require('fs');
 const path = require('path');
 const qrcode = require('qrcode');
+const config = require('../../config/config');
 
 let Client = null;
 let LocalAuth = null;
@@ -313,6 +314,7 @@ const destroyWhatsAppClient = async () => {
 };
 
 const initializeWhatsAppClient = async ({ force = false, runtimePaths = null } = {}) => {
+    if (config.safeLocalProductionMode) return getStatus();
     if (isInitializing && !force) return getStatus();
     if (client && !force) return getStatus();
 
@@ -381,6 +383,7 @@ const resetWhatsAppClient = async () => {
 };
 
 const sendAdminNotification = async (message) => {
+    if (config.safeLocalProductionMode) return null;
     const chatId = normalizeAdminChatId();
 
     if (!chatId) {

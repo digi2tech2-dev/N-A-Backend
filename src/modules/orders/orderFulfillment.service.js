@@ -460,10 +460,14 @@ const executeOrder = async (orderId, provider = null, auditContext = null) => {
 
     let result;
     try {
+        const canonicalReference = String(resolvedProvider?.provider?.adapterType || '').toLowerCase() === 'canonical-b2b'
+            ? { referenceId: order.orderNumber }
+            : {};
         result = await resolvedProvider.placeOrder({
             providerProductId: externalProductId ?? String(order.productId._id),
             externalProductId: externalProductId ?? String(order.productId._id),
             quantity: order.quantity,
+            ...canonicalReference,
             ...mappedCustomerFields,   // ← spread translated customer fields onto params
         });
     } catch (err) {
@@ -531,6 +535,7 @@ const executeOrder = async (orderId, provider = null, auditContext = null) => {
                 providerStatus: result.providerStatus,
                 providerOrderId: result.providerOrderId,
                 providerRawResponse: result.rawResponse,
+                outcomeUncertain: result.outcomeUncertain === true,
                 failedAt: now,
                 lastCheckedAt: now,
             },
@@ -579,6 +584,7 @@ const executeOrder = async (orderId, provider = null, auditContext = null) => {
                 providerOrderId: result.providerOrderId,
                 providerStatus: result.providerStatus,
                 providerRawResponse: result.rawResponse,
+                outcomeUncertain: result.outcomeUncertain === true,
                 lastCheckedAt: now,
             },
         });
@@ -1016,6 +1022,49 @@ const _escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  */
 const pollProcessingOrders = async (providerOverride = null) => {
     const stats = { checked: 0, completed: 0, failed: 0, pending: 0, manualReview: 0, errors: [] };
+
+    // Canonical B2B is the sole adapter allowed to recover a placement whose
+    // dispatch outcome is unknown. It is never re-placed: only its persisted
+    // local orderNumber is queried upstream.
+    if (!providerOverride) {
+        const uncertainOrders = await Order.find({
+            status: ORDER_STATUS.PROCESSING,
+            executionType: ORDER_EXECUTION_TYPES.AUTOMATIC,
+            providerStatus: 'PLACEMENT_UNCERTAIN',
+            providerOrderId: null,
+        }).sort({ lastCheckedAt: 1 }).limit(200);
+
+        for (const uncertainOrder of uncertainOrders) {
+            try {
+                const { Provider } = require('../providers/provider.model');
+                const provider = await Provider.findOne({ slug: uncertainOrder.providerCode, isActive: true });
+                if (!provider || provider.adapterType !== 'canonical-b2b') continue;
+                const adapter = getProviderAdapter(provider, { strict: true });
+                const recovered = await adapter.checkOrderByReference(uncertainOrder.orderNumber);
+                stats.checked++;
+                if (recovered?.found) {
+                    const current = await Order.findByIdAndUpdate(uncertainOrder._id, {
+                        $set: { providerOrderId: recovered.providerOrderId, providerStatus: recovered.providerStatus, providerRawResponse: recovered.rawResponse, outcomeUncertain: false, lastCheckedAt: new Date() },
+                    }, { new: true });
+                    const { action } = await processOrderStatusResult(current, recovered);
+                    if (action === 'completed') stats.completed++;
+                    else if (action === 'failed') stats.failed++;
+                    else stats.pending++;
+                    continue;
+                }
+                const current = await Order.findByIdAndUpdate(uncertainOrder._id, {
+                    $inc: { retryCount: 1 }, $set: { lastCheckedAt: new Date() },
+                }, { new: true });
+                if (current.retryCount >= MAX_RETRY_COUNT) {
+                    await Order.findByIdAndUpdate(current._id, { $set: { status: ORDER_STATUS.MANUAL_REVIEW } });
+                    stats.manualReview++;
+                } else stats.pending++;
+            } catch (err) {
+                stats.errors.push(`[canonical-uncertain:${uncertainOrder._id}] ${err.message}`);
+                stats.pending++;
+            }
+        }
+    }
 
     // ── 1. Fetch all PROCESSING automatic orders with a provider-side ID ──────
     const processingOrders = await Order.find({

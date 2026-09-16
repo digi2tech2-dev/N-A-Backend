@@ -42,6 +42,7 @@ const TRANSACTION_UNSUPPORTED_PATTERN = /Transaction numbers are only allowed|re
 const ORDER_NUMBER_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 const ORDER_NUMBER_LENGTH = 8;
 const ORDER_NUMBER_MAX_ATTEMPTS = 20;
+const generateCompatOrderId = () => `ID_${crypto.randomBytes(8).toString('hex')}`;
 
 const hasExactLedgerSnapshot = (order) => order?.walletDeductedUnits != null;
 
@@ -825,6 +826,7 @@ const _attemptCreateOrder = async (
                 userId,
                 productId: product._id,
                 orderNumber,
+                compatOrderId: generateCompatOrderId(),
                 quantity: qty,
                 basePriceSnapshot: '0',
                 markupPercentageSnapshot: 0,
@@ -1047,6 +1049,7 @@ const _attemptCreateOrder = async (
             userId,
             productId: product._id,
             orderNumber,
+            compatOrderId: generateCompatOrderId(),
             quantity: qty,
             basePriceSnapshot: pricing.basePrice,
             markupPercentageSnapshot: pricing.markupPercentage,

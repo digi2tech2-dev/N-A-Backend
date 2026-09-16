@@ -337,6 +337,13 @@ const orderSchema = new mongoose.Schema(
             default: null,
         },
 
+        // Used only by canonical-b2b recovery. It deliberately does not alter
+        // legacy or controlled Hago/Inchill mutation state machines.
+        outcomeUncertain: {
+            type: Boolean,
+            default: false,
+        },
+
         /**
          * Reserved, provider-safe execution snapshot for the future controlled
          * Hago Nobility mutation phase. Phase 1 never creates an executable

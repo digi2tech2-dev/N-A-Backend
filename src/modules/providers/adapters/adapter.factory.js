@@ -38,6 +38,7 @@ const { IbraAdapter } = require('./ibra.adapter');
 const { DealerApiAdapter } = require('./dealerApi.service');
 const { HagoAdapter } = require('./hago.adapter');
 const { InchillAdapter } = require('./inchill.adapter');
+const { CanonicalB2BAdapter } = require('./canonicalB2B.adapter');
 
 // ─── Registry ────────────────────────────────────────────────────────────────
 //
@@ -207,6 +208,7 @@ const getAdapter = (provider, adapterOptions = {}) => {
  * @returns {BaseProviderAdapter}
  */
 const getProviderAdapter = (provider, options = {}) => {
+    const adapterType = (provider.adapterType ?? '').toLowerCase().trim();
     const bySlug = (provider.slug ?? '').toLowerCase().trim();
     const byName = (provider.name ?? '').toLowerCase().trim();
     const isProduction = process.env.NODE_ENV === 'production';
@@ -216,7 +218,8 @@ const getProviderAdapter = (provider, options = {}) => {
     const strict = isProduction || options.strict === true;
     const allowMock = !isProduction && options.allowMock !== false;
 
-    const AdapterClass = registry.get(bySlug) ?? registry.get(byName);
+    const AdapterClass = (adapterType === 'canonical-b2b' ? CanonicalB2BAdapter : null)
+        ?? registry.get(bySlug) ?? registry.get(byName);
 
     if (!AdapterClass) {
         if (strict) {
