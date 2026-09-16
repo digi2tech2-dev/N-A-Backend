@@ -12,7 +12,7 @@
 
 const { User, USER_STATUS, ROLES } = require('../users/user.model');
 const { recalculateCreditUsed } = require('../wallet/wallet.service');
-const { isExactLedgerEnabled, updateExactCreditLimitAtomic } = require('../wallet/exactLedger.service');
+const { isExactLedgerEnabled, updateExactCreditLimitAtomic, convertExactWalletCurrencyAtomic } = require('../wallet/exactLedger.service');
 const { legacyMoneyToUnits } = require('../../shared/utils/exactLedgerMoney');
 const { serializeExactCompatibleUser } = require('../../shared/utils/exactLedgerCompatibility');
 const { NotFoundError, ConflictError, BusinessRuleError } = require('../../shared/errors/AppError');
@@ -321,7 +321,37 @@ const updateUserCurrency = async (id, currency, adminId) => {
     // Same currency → no-op
     if (user.currency === code) return user;
     if (isExactLedgerEnabled()) {
-        throw new BusinessRuleError('Currency changes are unavailable while the exact ledger rollout is enabled.', 'EXACT_LEDGER_CURRENCY_CHANGE_UNSUPPORTED');
+        const conversion = await convertExactWalletCurrencyAtomic({
+            userId: user._id,
+            targetCurrency: code,
+        });
+
+        if (conversion.changed) {
+            createAuditLog({
+                actorId: adminId,
+                actorRole: ACTOR_ROLES.ADMIN,
+                action: ADMIN_ACTIONS.USER_UPDATED,
+                entityType: ENTITY_TYPES.USER,
+                entityId: user._id,
+                metadata: {
+                    field: 'currency',
+                    previousCurrency: conversion.previousCurrency,
+                    newCurrency: conversion.newCurrency,
+                    sourceRateExact: conversion.sourceRateExact,
+                    targetRateExact: conversion.targetRateExact,
+                    previousBalance: conversion.previousBalance,
+                    newBalance: conversion.newBalance,
+                    previousCreditLimit: conversion.previousCreditLimit,
+                    newCreditLimit: conversion.newCreditLimit,
+                    previousCreditUsed: conversion.previousCreditUsed,
+                    newCreditUsed: conversion.newCreditUsed,
+                    previousWalletLedgerVersion: conversion.previousWalletLedgerVersion,
+                    newWalletLedgerVersion: conversion.newWalletLedgerVersion,
+                },
+            });
+        }
+
+        return _findOrFail(id);
     }
 
     // Validate new currency exists and is active
@@ -437,6 +467,7 @@ const updateUserCreditLimit = async (id, creditLimit, adminId) => {
     if (isExactLedgerEnabled()) {
         await updateExactCreditLimitAtomic({
             userId: user._id,
+            expectedCurrency: user.currency || 'USD',
             targetCreditLimitUnits: legacyMoneyToUnits(nextCreditLimit, { label: 'Credit limit' }),
         });
     } else {

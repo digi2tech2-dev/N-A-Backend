@@ -1019,6 +1019,7 @@ const _attemptCreateOrder = async (
         const financialDebit = exactLedgerEnabled
             ? await debitExactWalletAtomic({
                 userId,
+                expectedCurrency: userCurrency,
                 units: chargedAmountUnits,
                 reference: orderId,
                 sourceType: 'ORDER',
@@ -1029,6 +1030,7 @@ const _attemptCreateOrder = async (
             })
             : await debitWalletAtomic({
                 userId,
+                expectedCurrency: userCurrency,
                 amount: chargedAmount,     // ← wallet always in user currency
                 reference: orderId,
                 description: `Payment for: ${product.name} x${qty}`,
@@ -1098,6 +1100,7 @@ const _attemptCreateOrder = async (
                 if (!session) {
                     await refundWalletAtomic({
                         userId,
+                        expectedCurrency: userCurrency,
                         walletDeducted,
                         creditUsedAmount: Number(creditUsedAmount) || 0,
                         reference: orderId,
@@ -1119,6 +1122,7 @@ const _attemptCreateOrder = async (
                 if (!session) {
                     await refundWalletAtomic({
                         userId,
+                        expectedCurrency: userCurrency,
                         walletDeducted,
                         creditUsedAmount: Number(creditUsedAmount) || 0,
                         reference: orderId,
@@ -1138,6 +1142,7 @@ const _attemptCreateOrder = async (
             if (!session) {
                 await refundWalletAtomic({
                     userId,
+                    expectedCurrency: userCurrency,
                     walletDeducted,
                     creditUsedAmount: Number(creditUsedAmount) || 0,
                     reference: orderId,
@@ -1408,6 +1413,7 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
             if (exactRefundUnits) {
                 await refundExactWalletAtomic({
                     userId: order.userId,
+                    expectedCurrency: order.currency,
                     units: exactRefundUnits,
                     reference: order._id,
                     sourceType: 'ORDER',
@@ -1419,6 +1425,7 @@ const markOrderAsFailed = async (orderId, auditContext = null) => {
             } else {
                 await refundWalletAtomic({
                     userId: order.userId,
+                    expectedCurrency: order.currency,
                     walletDeducted: refundWallet,
                     creditUsedAmount: refundCredit,
                     reference: order._id,
@@ -1618,6 +1625,7 @@ const processOrderRefund = async (orderId, remains = 0, auditContext = null) => 
             if (exactChargedUnits) {
                 await refundExactWalletAtomic({
                     userId: order.userId,
+                    expectedCurrency: order.currency,
                     units: refundUnits,
                     reference: order._id,
                     sourceType: 'ORDER',
@@ -1629,6 +1637,7 @@ const processOrderRefund = async (orderId, remains = 0, auditContext = null) => 
             } else {
                 await refundWalletAtomic({
                     userId: order.userId,
+                    expectedCurrency: order.currency,
                     walletDeducted: refundAmount,
                     creditUsedAmount: 0,
                     reference: order._id,

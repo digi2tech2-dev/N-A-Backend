@@ -1,5 +1,6 @@
 'use strict';
 
+const mongoose = require('mongoose');
 const { User } = require('../modules/users/user.model');
 const { WalletTransaction, TRANSACTION_TYPES } = require('../modules/wallet/walletTransaction.model');
 const {
@@ -79,6 +80,7 @@ describe('Phase 3 exact customer-ledger execution gate', () => {
 
         const debit = await debitExactWalletAtomic({
             userId: user._id,
+            expectedCurrency: user.currency,
             decimal: micro,
             sourceKey: `exact-test-debit:${user._id}`,
             description: 'micro debit',
@@ -96,6 +98,7 @@ describe('Phase 3 exact customer-ledger execution gate', () => {
 
         await refundExactWalletAtomic({
             userId: user._id,
+            expectedCurrency: user.currency,
             units: decimalStringToUnits(micro),
             sourceKey: `exact-test-refund:${user._id}`,
             description: 'micro refund',
@@ -126,22 +129,45 @@ describe('Phase 3 exact customer-ledger execution gate', () => {
         process.env.EXACT_LEDGER_ENABLED = 'true';
         const group = await createGroup();
         const user = await createCustomer({ groupId: group._id, walletBalance: 1 });
-        const debit = () => debitExactWalletAtomic({ userId: user._id, decimal: '0.001', sourceKey: `exact-concurrent:${user._id}:${Math.random()}` });
+        const debit = () => debitExactWalletAtomic({ userId: user._id, expectedCurrency: user.currency, decimal: '0.001', sourceKey: `exact-concurrent:${user._id}:${Math.random()}` });
         await Promise.all([debit(), debit()]);
         const fresh = await User.findById(user._id).select(exactFields);
         expect(unitsToDecimalString(fresh.walletBalanceUnits)).toBe('0.998');
         expect(fresh.walletLedgerVersion).toBe(2);
     });
 
+    test('a same-currency caller-session version CAS miss is not reported as a currency change', async () => {
+        process.env.EXACT_LEDGER_ENABLED = 'true';
+        const group = await createGroup();
+        const user = await createCustomer({ groupId: group._id, currency: 'USD', walletBalance: 1 });
+        const session = await mongoose.startSession();
+        const updateOne = jest.spyOn(User, 'updateOne').mockResolvedValueOnce({ modifiedCount: 0 });
+        session.startTransaction();
+        try {
+            await expect(debitExactWalletAtomic({
+                userId: user._id,
+                expectedCurrency: 'USD',
+                decimal: '0.001',
+                session,
+            })).rejects.toMatchObject({ code: 'EXACT_LEDGER_CAS_CONFLICT' });
+            expect(await WalletTransaction.countDocuments({ userId: user._id })).toBe(0);
+        } finally {
+            updateOne.mockRestore();
+            if (session.inTransaction()) await session.abortTransaction();
+            await session.endSession();
+        }
+    });
+
     test('credit accepts a micro amount and preserves exact transaction snapshots', async () => {
         process.env.EXACT_LEDGER_ENABLED = 'true';
         const group = await createGroup();
         const user = await createCustomer({ groupId: group._id, walletBalance: 0 });
-        const result = await creditExactWalletAtomic({ userId: user._id, decimal: '0.000001', sourceKey: `exact-credit:${user._id}` });
+        const result = await creditExactWalletAtomic({ userId: user._id, expectedCurrency: user.currency, decimal: '0.000001', sourceKey: `exact-credit:${user._id}` });
         expect(unitsToDecimalString(result.balanceAfterUnits)).toBe('0.000001');
         const tx = await WalletTransaction.findById(result.transaction._id).select(txExactFields);
         expect(unitsToDecimalString(tx.balanceBeforeUnits)).toBe('0');
         expect(unitsToDecimalString(tx.balanceAfterUnits)).toBe('0.000001');
+        expect(tx.currency).toBe('USD');
     });
 
     test('admin adjustments and shared deposit/referral credits follow initialized exact authority', async () => {
@@ -149,16 +175,28 @@ describe('Phase 3 exact customer-ledger execution gate', () => {
         const group = await createGroup({ percentage: 0 });
         const admin = await createAdmin();
         const user = await createCustomer({ groupId: group._id, walletBalance: 1 });
-        await debitExactWalletAtomic({ userId: user._id, decimal: '0.0001', sourceKey: `seed-micro:${user._id}` });
+        await debitExactWalletAtomic({ userId: user._id, expectedCurrency: user.currency, decimal: '0.0001', sourceKey: `seed-micro:${user._id}` });
         await adminWalletService.addFunds(user._id, 1, 'admin credit', admin._id);
         await adminWalletService.deductFunds(user._id, 0.5, 'admin debit', admin._id);
-        await creditWalletDirect({ userId: user._id, amount: 0.25, sourceType: 'DEPOSIT', sourceKey: `deposit:${user._id}` });
-        await creditWalletDirect({ userId: user._id, amount: 0.25, sourceType: 'REFERRAL_PAYOUT', sourceKey: `referral:${user._id}` });
+        await creditWalletDirect({ userId: user._id, expectedCurrency: user.currency, amount: 0.25, sourceType: 'DEPOSIT', sourceKey: `deposit:${user._id}` });
+        await creditWalletDirect({ userId: user._id, expectedCurrency: user.currency, amount: 0.25, sourceType: 'REFERRAL_PAYOUT', sourceKey: `referral:${user._id}` });
         const fresh = await User.findById(user._id).select(exactFields);
         expect(unitsToDecimalString(fresh.walletBalanceUnits)).toBe('1.9999');
         // The exact balance has micro precision, so the compatibility Number is
         // intentionally not overwritten; all mutations above used exact state.
         expect(fresh.walletBalance).toBe(1);
+        const transactions = await WalletTransaction.find({ userId: user._id });
+        expect(transactions).toHaveLength(5);
+        expect(transactions.every((transaction) => transaction.currency === user.currency)).toBe(true);
+    });
+
+    test('exact admin set balance records the entered wallet denomination', async () => {
+        process.env.EXACT_LEDGER_ENABLED = 'true';
+        const group = await createGroup();
+        const admin = await createAdmin();
+        const user = await createCustomer({ groupId: group._id, currency: 'EGP', walletBalance: 5 });
+        const result = await adminWalletService.setBalance(user._id, 3, 'admin set', admin._id);
+        expect(result.transaction.currency).toBe('EGP');
     });
 
     test('gated checkout snapshots and refunds a micro customer charge without entering a provider path', async () => {
@@ -175,12 +213,14 @@ describe('Phase 3 exact customer-ledger execution gate', () => {
         expect(persisted.totalPrice).toBe('0.0001');
         expect(unitsToDecimalString(persisted.chargedAmountUnits)).toBe('0.0001');
         expect(unitsToDecimalString(persisted.walletDeductedUnits)).toBe('0.0001');
+        expect((await WalletTransaction.findOne({ userId: user._id, type: TRANSACTION_TYPES.DEBIT })).currency).toBe(order.currency);
 
         await markOrderAsFailed(persisted._id);
         const fresh = await User.findById(user._id).select(exactFields);
         expect(fresh.walletBalance).toBe(1);
         expect(unitsToDecimalString(fresh.walletBalanceUnits)).toBe('1');
         expect(await WalletTransaction.countDocuments({ userId: user._id, type: TRANSACTION_TYPES.REFUND })).toBe(1);
+        expect((await WalletTransaction.findOne({ userId: user._id, type: TRANSACTION_TYPES.REFUND })).currency).toBe(order.currency);
     });
 
     test('partial exact refund uses deterministic integer-unit allocation', async () => {

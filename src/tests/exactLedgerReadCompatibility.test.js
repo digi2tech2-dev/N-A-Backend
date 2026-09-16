@@ -54,7 +54,7 @@ describe('exact ledger read compatibility', () => {
         });
         const micro = '0.0000000000001';
 
-        await debitExactWalletAtomic({ userId: customer._id, decimal: micro, description: 'micro debit' });
+        await debitExactWalletAtomic({ userId: customer._id, expectedCurrency: customer.currency, decimal: micro, description: 'micro debit' });
         const debitedWallet = await invoke(meController.getWallet, { user: { _id: customer._id } });
         expect(debitedWallet.data).toMatchObject({
             walletBalance: `-${micro}`,
@@ -65,8 +65,8 @@ describe('exact ledger read compatibility', () => {
         });
         expect(debitedWallet.data.recentTransactions[0]).not.toHaveProperty('amountUnits');
 
-        await creditExactWalletAtomic({ userId: customer._id, decimal: micro, description: 'micro credit' });
-        await refundExactWalletAtomic({ userId: customer._id, units: decimalStringToUnits(micro), description: 'micro refund' });
+        await creditExactWalletAtomic({ userId: customer._id, expectedCurrency: customer.currency, decimal: micro, description: 'micro credit' });
+        await refundExactWalletAtomic({ userId: customer._id, expectedCurrency: customer.currency, units: decimalStringToUnits(micro), description: 'micro refund' });
 
         const profile = await userService.getMyProfile(customer._id);
         expect(profile).toMatchObject({
@@ -89,6 +89,7 @@ describe('exact ledger read compatibility', () => {
             balanceAfter: micro,
         });
         expect(refund).not.toHaveProperty('amountUnits');
+        expect(refund.currency).toBe(customer.currency);
 
         const adminWallet = await adminWalletService.getWallet(customer._id);
         expect(adminWallet.user).toMatchObject({
@@ -112,6 +113,24 @@ describe('exact ledger read compatibility', () => {
         const meProfile = await invoke(meController.getProfile, { user: { _id: customer._id } });
         expect(meProfile.data.walletBalance).toBe(micro);
         expect(meProfile.data.availableBalance).toBe('1.0000000000001');
+    });
+
+    test('preserves a historical transaction with an unknown denomination as null', async () => {
+        process.env.EXACT_LEDGER_ENABLED = 'true';
+        const group = await createGroup();
+        const customer = await createCustomer({ groupId: group._id, currency: 'USD' });
+        await WalletTransaction.create({
+            userId: customer._id,
+            type: 'CREDIT',
+            amount: 1,
+            balanceBefore: 0,
+            balanceAfter: 1,
+            description: 'historical transaction',
+        });
+
+        const history = await walletService.getTransactionHistory(customer._id);
+        expect(history.transactions).toHaveLength(1);
+        expect(history.transactions[0].currency).toBeNull();
     });
 
     test('returns exact order charge splits and preserves client compatibility micro prices', async () => {

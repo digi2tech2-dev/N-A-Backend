@@ -65,6 +65,7 @@ const refundExactFailedOrder = async (order) => {
         }
         await refundExactWalletAtomic({
             userId: current.userId,
+            expectedCurrency: current.currency,
             units: current.walletDeductedUnits,
             reference: current._id,
             sourceType: 'ORDER',
@@ -188,6 +189,7 @@ const refundFailedOrder = async (order) => {
         } else {
             await refundWalletAtomic({
                 userId: order.userId,
+                expectedCurrency: order.currency,
                 walletDeducted: refundWallet,
                 creditUsedAmount: refundCredit,
                 reference: order._id,

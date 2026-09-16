@@ -457,6 +457,7 @@ const completeOrder = async (orderId, adminId, auditContext = null) => {
         if (order.walletDeductedUnits != null) {
             await debitExactWalletAtomic({
                 userId: order.userId,
+                expectedCurrency: order.currency,
                 units: order.walletDeductedUnits,
                 reference: order._id,
                 sourceType: 'ORDER',
@@ -470,6 +471,7 @@ const completeOrder = async (orderId, adminId, auditContext = null) => {
         } else if (reDeductAmount > 0) {
             await forcedDebitWallet({
                 userId: order.userId,
+                expectedCurrency: order.currency,
                 amount: reDeductAmount,
                 reference: order._id,
                 description: `Admin forced completion re-deduction for order #${order.orderNumber || order._id} (previously refunded ${reDeductAmount} ${order.currency || 'USD'})`,

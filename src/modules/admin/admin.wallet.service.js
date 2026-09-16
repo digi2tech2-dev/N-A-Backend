@@ -151,6 +151,7 @@ const addFunds = async (userId, amount, reason, adminId) => {
     if (isExactLedgerEnabled()) {
         const result = await creditExactWalletAtomic({
             userId,
+            expectedCurrency: user.currency || 'USD',
             units: legacyMoneyToUnits(parsedAmount, { label: 'Admin credit amount' }),
             description: reason || `Admin manual credit (${user.currency || 'USD'})`,
         });
@@ -180,6 +181,7 @@ const addFunds = async (userId, amount, reason, adminId) => {
     // Create the wallet transaction record
     const transaction = await WalletTransaction.create({
         userId,
+        currency: userCurrency,
         type: TRANSACTION_TYPES.CREDIT,
         amount: parsedAmount,
         balanceBefore,
@@ -240,6 +242,7 @@ const deductFunds = async (userId, amount, reason, adminId) => {
     if (isExactLedgerEnabled()) {
         const result = await debitExactWalletAtomic({
             userId,
+            expectedCurrency: user.currency || 'USD',
             units: legacyMoneyToUnits(parsedAmount, { label: 'Admin debit amount' }),
             description: reason || `Admin manual debit (${user.currency || 'USD'})`,
             requireActive: false,
@@ -282,6 +285,7 @@ const deductFunds = async (userId, amount, reason, adminId) => {
     // Create the wallet transaction record
     const transaction = await WalletTransaction.create({
         userId,
+        currency: userCurrency,
         type: TRANSACTION_TYPES.DEBIT,
         amount: parsedAmount,
         balanceBefore,
@@ -345,6 +349,7 @@ const setBalance = async (userId, targetBalance, reason, adminId) => {
     if (isExactLedgerEnabled()) {
         const result = await setExactWalletBalanceAtomic({
             userId,
+            expectedCurrency: user.currency || 'USD',
             targetBalanceUnits: legacyMoneyToUnits(newBalance, { label: 'Admin target balance' }),
             description: reason || `Admin set balance to ${newBalance} (${user.currency || 'USD'})`,
         });
@@ -375,6 +380,7 @@ const setBalance = async (userId, targetBalance, reason, adminId) => {
     // Create the wallet transaction record
     const transaction = await WalletTransaction.create({
         userId,
+        currency: userCurrency,
         type: txType,
         amount: safeRound(Math.abs(delta)),
         balanceBefore,
@@ -484,6 +490,7 @@ const adjustNegativeBalancesForInflation = async (percentageIncrease, adminId, c
             // Create auditable wallet transaction
             await WalletTransaction.create({
                 userId: user._id,
+                currency: user.currency || null,
                 type: TRANSACTION_TYPES.DEBT_ADJUSTMENT,
                 amount: adjustment,
                 balanceBefore,
@@ -590,6 +597,7 @@ const adjustNegativeBalancesForDeflation = async (percentageDecrease, adminId, c
             // Create auditable wallet transaction
             await WalletTransaction.create({
                 userId: user._id,
+                currency: user.currency || null,
                 type: TRANSACTION_TYPES.DEBT_ADJUSTMENT,
                 amount: adjustment,
                 balanceBefore,

@@ -95,6 +95,16 @@ const walletTransactionSchema = new mongoose.Schema(
             validate: { validator: isCanonicalLedgerUnits({ allowNegative: true, label: 'balanceAfterUnits' }), message: 'balanceAfterUnits must be canonical exact ledger units' },
         },
 
+        // Immutable denomination snapshot. Historical rows intentionally
+        // remain null when their original currency is not known.
+        currency: {
+            type: String,
+            uppercase: true,
+            trim: true,
+            match: [/^[A-Z]{3}$/, 'currency must be a valid ISO currency code'],
+            default: null,
+        },
+
         reference: {
             // Typically references an Order ID
             type: mongoose.Schema.Types.ObjectId,

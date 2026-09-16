@@ -226,6 +226,7 @@ const updateUser = async (id, { groupId, creditLimit, name, quantityLimit }) => 
         if (isExactLedgerEnabled()) {
             await updateExactCreditLimitAtomic({
                 userId: user._id,
+                expectedCurrency: user.currency || 'USD',
                 targetCreditLimitUnits: legacyMoneyToUnits(creditLimit, { label: 'Credit limit' }),
             });
             exactCreditLimitUpdated = true;

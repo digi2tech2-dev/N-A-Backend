@@ -339,6 +339,7 @@ const approveDeposit = async (depositId, adminId, adminOverrides = {}, auditCont
     // Credit the wallet
     await creditWalletDirect({
         userId: updated.userId,
+        expectedCurrency: walletCurrency,
         amount: walletCreditAmount,
         reference: updated._id,
         description: `Deposit #${updated._id.toString().slice(-6)} (${finalAmount} ${finalCurrency})`,

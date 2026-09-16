@@ -75,6 +75,7 @@ const _createTransactionRecord = async ({
     sourceType = null,
     sourceId = null,
     sourceKey = null,
+    currency = null,
     description,
     session,
 }) => {
@@ -88,6 +89,7 @@ const _createTransactionRecord = async ({
         sourceType,
         sourceId,
         sourceKey: sourceKey || null,
+        currency,
         status: 'COMPLETED',
         description,
     };
@@ -126,10 +128,11 @@ const _createTransactionRecord = async ({
  *
  * @returns {{ walletDeducted: number, creditUsedAmount: number, transaction: WalletTransaction }}
  */
-const debitWalletAtomic = async ({ userId, amount, reference = null, description = '', session }) => {
+const debitWalletAtomic = async ({ userId, amount, expectedCurrency = null, reference = null, description = '', session }) => {
     if (isExactLedgerEnabled()) {
         return debitExactWalletAtomic({
             userId,
+            expectedCurrency,
             units: legacyMoneyToUnits(amount, { label: 'Legacy debit amount' }),
             reference,
             description,
@@ -196,6 +199,7 @@ const debitWalletAtomic = async ({ userId, amount, reference = null, description
         balanceBefore: oldBalance,
         balanceAfter: newBalance,
         reference,
+        currency: oldUser.currency || null,
         description,
         session,
     });
@@ -222,10 +226,11 @@ const debitWalletAtomic = async ({ userId, amount, reference = null, description
  * @param {ClientSession}   [params.session]
  * @returns {{ transaction: WalletTransaction }}
  */
-const forcedDebitWallet = async ({ userId, amount, reference = null, description = '', session }) => {
+const forcedDebitWallet = async ({ userId, amount, expectedCurrency = null, reference = null, description = '', session }) => {
     if (isExactLedgerEnabled()) {
         return debitExactWalletAtomic({
             userId,
+            expectedCurrency,
             units: legacyMoneyToUnits(amount, { label: 'Forced debit amount' }),
             reference,
             description,
@@ -266,6 +271,7 @@ const forcedDebitWallet = async ({ userId, amount, reference = null, description
         balanceBefore,
         balanceAfter,
         reference,
+        currency: user.currency || null,
         description,
         session,
     });
@@ -285,6 +291,7 @@ const refundWalletAtomic = async ({
     userId,
     walletDeducted,
     creditUsedAmount,
+    expectedCurrency = null,
     reference,
     description = '',
     session,
@@ -294,6 +301,7 @@ const refundWalletAtomic = async ({
         const creditOnly = refundAmount > 0 ? 0 : safeRound(Number(creditUsedAmount || 0));
         return refundExactWalletAtomic({
             userId,
+            expectedCurrency,
             units: legacyMoneyToUnits(safeRound(refundAmount + creditOnly), { label: 'Legacy refund amount' }),
             reference,
             description,
@@ -337,6 +345,7 @@ const refundWalletAtomic = async ({
         balanceBefore: oldBal,
         balanceAfter: safeRound(oldBal + totalRefund),
         reference,
+        currency: oldUser.currency || null,
         description,
         session,
     });
@@ -355,6 +364,7 @@ const refundWalletAtomic = async ({
 const creditWalletDirect = async ({
     userId,
     amount,
+    expectedCurrency = null,
     reference = null,
     sourceType = null,
     sourceId = null,
@@ -366,6 +376,7 @@ const creditWalletDirect = async ({
     if (isExactLedgerEnabled()) {
         return creditExactWalletAtomic({
             userId,
+            expectedCurrency,
             units: legacyMoneyToUnits(amount, { label: 'Legacy credit amount' }),
             reference,
             sourceType,
@@ -409,6 +420,7 @@ const creditWalletDirect = async ({
         sourceType,
         sourceId,
         sourceKey,
+        currency: oldUser.currency || null,
         balanceBefore: oldBal,
         balanceAfter: safeRound(oldBal + amount),
     });

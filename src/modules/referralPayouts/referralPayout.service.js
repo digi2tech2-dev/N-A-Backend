@@ -578,6 +578,7 @@ const payWalletReferralPayout = async ({ payoutId, adminId, auditContext = {}, t
             const amount = Number(toDecimal(payout.amount).toDecimalPlaces(2, Decimal.ROUND_HALF_UP).toString());
             const credit = await creditWalletDirect({
                 userId: payout.userId,
+                expectedCurrency: payout.currency,
                 amount,
                 reference: null,
                 sourceType: WALLET_TRANSACTION_SOURCE_TYPES.REFERRAL_PAYOUT,
