@@ -10,6 +10,7 @@ const {
     isExactLedgerEnabled,
     deriveState,
 } = require('../modules/wallet/exactLedger.service');
+const adminUsersService = require('../modules/admin/admin.users.service');
 const { decimalStringToUnits, unitsToDecimalString } = require('../shared/utils/exactLedgerMoney');
 const { convertUsdDecimalToUserCurrencyExact } = require('../services/currencyConverter.service');
 const { Currency } = require('../modules/currency/currency.model');
@@ -197,6 +198,31 @@ describe('Phase 3 exact customer-ledger execution gate', () => {
         const user = await createCustomer({ groupId: group._id, currency: 'EGP', walletBalance: 5 });
         const result = await adminWalletService.setBalance(user._id, 3, 'admin set', admin._id);
         expect(result.transaction.currency).toBe('EGP');
+    });
+
+    test('admin credit-limit updates preserve the exact balance and do not create a wallet transaction', async () => {
+        process.env.EXACT_LEDGER_ENABLED = 'true';
+        const group = await createGroup();
+        const admin = await createAdmin({ groupId: group._id });
+        const user = await createCustomer({
+            groupId: group._id,
+            currency: 'EGP',
+            walletBalance: -4500,
+            creditLimit: 4500,
+            creditUsed: 4500,
+        });
+
+        await adminUsersService.updateUserCreditLimit(user._id, 7000, admin._id);
+
+        const fresh = await User.findById(user._id).select(exactFields);
+        expect(unitsToDecimalString(fresh.walletBalanceUnits)).toBe('-4500');
+        expect(unitsToDecimalString(fresh.creditLimitUnits)).toBe('7000');
+        expect(unitsToDecimalString(fresh.creditUsedUnits)).toBe('4500');
+        expect(fresh.walletBalance).toBe(-4500);
+        expect(fresh.creditLimit).toBe(7000);
+        expect(fresh.creditUsed).toBe(4500);
+        expect(fresh.walletLedgerVersion).toBe(1);
+        expect(await WalletTransaction.countDocuments({ userId: user._id })).toBe(0);
     });
 
     test('gated checkout snapshots and refunds a micro customer charge without entering a provider path', async () => {

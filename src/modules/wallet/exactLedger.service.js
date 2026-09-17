@@ -183,8 +183,10 @@ const runExactMutation = async ({ userId, expectedCurrency, type, amountUnits = 
                 const transactionType = requestedBalance == null
                     ? type
                     : (compareUnits(after, before) >= 0 ? TRANSACTION_TYPES.CREDIT : TRANSACTION_TYPES.DEBIT);
+                // A target credit-limit mutation changes no wallet balance and
+                // must not create a synthetic CREDIT/DEBIT transaction.
                 const transactionAmount = requestedBalance == null
-                    ? amount
+                    ? (amount ?? '0')
                     : (compareUnits(after, before) >= 0 ? subtractUnits(after, before) : subtractUnits(before, after));
                 if (transactionType === TRANSACTION_TYPES.DEBIT && enforceAvailableFunds && compareUnits(addUnits(before, creditLimitUnits), transactionAmount) < 0) {
                     throw new InsufficientFundsError(transactionAmount, addUnits(before, creditLimitUnits));
