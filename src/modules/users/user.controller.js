@@ -35,6 +35,21 @@ const updateMyAvatar = catchAsync(async (req, res) => {
     sendSuccess(res, user, 'Avatar updated successfully.');
 });
 
+const getMyFavorites = catchAsync(async (req, res) => {
+    const products = await userService.getMyFavorites(req.user._id);
+    sendSuccess(res, { products }, 'Favorites retrieved successfully.');
+});
+
+const addMyFavorite = catchAsync(async (req, res) => {
+    const favorite = await userService.addMyFavorite(req.user._id, req.params.productId);
+    sendSuccess(res, favorite, 'Product added to favorites.');
+});
+
+const removeMyFavorite = catchAsync(async (req, res) => {
+    const favorite = await userService.removeMyFavorite(req.user._id, req.params.productId);
+    sendSuccess(res, favorite, 'Product removed from favorites.');
+});
+
 // ── Admin: Queries ────────────────────────────────────────────────────────────
 
 const listUsers = catchAsync(async (req, res) => {
@@ -104,6 +119,9 @@ module.exports = {
     getMyProfile,
     updateMyProfile,
     updateMyAvatar,
+    getMyFavorites,
+    addMyFavorite,
+    removeMyFavorite,
     listUsers,
     getUser,
     updateUser,

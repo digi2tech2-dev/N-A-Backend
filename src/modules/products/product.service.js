@@ -30,7 +30,9 @@ const {
     computeFinalPrice,
 } = require('./product.model');
 const { ProviderProduct } = require('../providers/providerProduct.model');
-const { isPositive, add, normalizeProviderDecimalPrice } = require('../../shared/utils/decimalPrecision');
+const Group = require('../groups/group.model');
+const { computeMarkup, isPositive, add, normalizeProviderDecimalPrice } = require('../../shared/utils/decimalPrecision');
+const { sanitizeProductsForCustomer } = require('./product.customerSerializer');
 const {
     NotFoundError,
     ConflictError,
@@ -99,6 +101,33 @@ const listProducts = async ({ activeOnly = true, page = 1, limit = 50 } = {}) =>
         products,
         pagination: { page, limit, total, pages: Math.ceil(total / limit) },
     };
+};
+
+const listCustomerProductsByIds = async ({ productIds = [], user = null } = {}) => {
+    const ids = Array.from(new Set((Array.isArray(productIds) ? productIds : []).map(String))).filter(Boolean);
+    if (!ids.length) return [];
+
+    const products = await Product.find({
+        _id: { $in: ids },
+        isActive: true,
+        deletedAt: null,
+    })
+        .sort({ displayOrder: 1, name: 1 })
+        .populate('provider', 'name slug')
+        .populate('providerProduct', 'rawName externalProductId');
+
+    if (user?.groupId) {
+        const group = await Group.findById(user.groupId).select('percentage');
+        const markup = Number(group?.percentage || 0);
+        if (markup > 0) {
+            for (const product of products) {
+                const base = String(product.finalPrice || product.basePrice || '0');
+                product.finalPrice = computeMarkup(base, 'percentage', markup);
+            }
+        }
+    }
+
+    return sanitizeProductsForCustomer(products);
 };
 
 /**
@@ -631,6 +660,7 @@ const getExternalProductId = async (productId) => {
 
 module.exports = {
     listProducts,
+    listCustomerProductsByIds,
     getProductById,
     createProduct,
     publishFromProviderProduct,

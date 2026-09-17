@@ -39,6 +39,10 @@ router.patch('/me', updateMyProfileValidation, validate, userController.updateMy
  */
 router.patch('/me/avatar', avatarUpload.single('avatar'), userController.updateMyAvatar);
 
+router.get('/me/favorites', authorize('CUSTOMER'), userController.getMyFavorites);
+router.post('/me/favorites/:productId', authorize('CUSTOMER'), userController.addMyFavorite);
+router.delete('/me/favorites/:productId', authorize('CUSTOMER'), userController.removeMyFavorite);
+
 // ── Admin: Queries ────────────────────────────────────────────────────────────
 
 /**

@@ -8,60 +8,7 @@ const { InchillFinancialExecutionService } = require('../providers/inchill/inchi
 const { inchillCustomerTargetVerificationService } = require('../providers/inchill/inchillCustomerTargetVerification.service');
 const { sendSuccess, sendCreated, sendPaginated } = require('../../shared/utils/apiResponse');
 const catchAsync = require('../../shared/utils/catchAsync');
-
-// ─── Sensitive fields that must NEVER reach non-admin clients ─────────────────
-
-const SENSITIVE_FIELDS = [
-    'providerPrice',
-    'markupType',
-    'markupValue',
-    'pricingMode',
-    'hagoNobilityPricing',
-    'provider',
-    'providerProduct',
-    'providerMapping',
-    'syncPriceWithProvider',
-    'enableManualPrice',
-    'manualPriceAdjustment',
-    'executionType',
-    'createdBy',
-    'deletedAt',
-    'internalNotes',
-    'syncedProviderBasePrice',
-    'supplierId',
-    'providerId',
-    'externalProductId',
-    'externalProductName',
-    'costPrice',
-    '__v',
-];
-
-/**
- * Strip sensitive business fields from a product before sending to customers.
- * Works on both Mongoose documents and plain objects.
- */
-const sanitizeProductForCustomer = (product) => {
-    if (!product) return product;
-    const obj = typeof product.toObject === 'function' ? product.toObject() : { ...product };
-    const providerSlug = String(obj.provider?.slug ?? '').toLowerCase();
-    const externalProductId = String(obj.providerProduct?.externalProductId ?? '');
-    obj.isInchillDiamond = providerSlug === 'inchill' && (
-        externalProductId === 'INCHILL_DIAMOND_AMOUNT'
-        || obj.providerProduct?.rawPayload?.metadata?.serviceType === 'DIAMOND'
-    );
-    obj.requiresInchillTargetVerification = obj.isInchillDiamond;
-    for (const field of SENSITIVE_FIELDS) {
-        delete obj[field];
-    }
-    obj.showAccountNumber = Boolean(obj.showAccountNumber);
-    obj.displayAccountNumber = obj.showAccountNumber
-        ? (obj.displayAccountNumber || null)
-        : null;
-    return obj;
-};
-
-const sanitizeProductsForCustomer = (products) =>
-    (Array.isArray(products) ? products : []).map(sanitizeProductForCustomer);
+const { sanitizeProductForCustomer, sanitizeProductsForCustomer } = require('./product.customerSerializer');
 
 // ─── User-facing ──────────────────────────────────────────────────────────────
 

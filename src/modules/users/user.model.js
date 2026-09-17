@@ -304,6 +304,13 @@ const userSchema = new mongoose.Schema(
             default: [],
         },
 
+        // Customer-owned storefront favorites. $addToSet/$pull mutations keep
+        // this collection deduplicated without read-modify-write races.
+        favoriteProductIds: {
+            type: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
+            default: [],
+        },
+
         // ── Two-Factor Authentication ────────────────────────────────────────
         /**
          * Hashed email OTP for pending 2FA login challenges.

@@ -1,7 +1,10 @@
 'use strict';
 
 const { User, ROLES, USER_STATUS } = require('./user.model');
+const mongoose = require('mongoose');
 const Group = require('../groups/group.model');
+const { Product } = require('../products/product.model');
+const productService = require('../products/product.service');
 const { Currency } = require('../currency/currency.model');
 const { recalculateCreditUsed } = require('../wallet/wallet.service');
 const { isExactLedgerEnabled, updateExactCreditLimitAtomic } = require('../wallet/exactLedger.service');
@@ -266,6 +269,47 @@ const getMyProfile = async (userId) => {
         : (user.toSafeObject ? user.toSafeObject() : user.toObject());
 };
 
+const normalizeFavoriteProductId = (productId) => {
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+        throw new AppError('Invalid product ID.', 400, 'INVALID_PRODUCT_ID');
+    }
+    return new mongoose.Types.ObjectId(productId);
+};
+
+const getMyFavorites = async (userId) => {
+    const user = await User.findById(userId).select('favoriteProductIds groupId');
+    if (!user) throw new NotFoundError('User');
+    return productService.listCustomerProductsByIds({
+        productIds: user.favoriteProductIds,
+        user,
+    });
+};
+
+const addMyFavorite = async (userId, productId) => {
+    const normalizedProductId = normalizeFavoriteProductId(productId);
+    const product = await Product.findOne({
+        _id: normalizedProductId,
+        isActive: true,
+        deletedAt: null,
+    }).select('_id');
+    if (!product) throw new NotFoundError('Product');
+
+    await User.updateOne(
+        { _id: userId },
+        { $addToSet: { favoriteProductIds: product._id } }
+    );
+    return { productId: String(product._id) };
+};
+
+const removeMyFavorite = async (userId, productId) => {
+    const normalizedProductId = normalizeFavoriteProductId(productId);
+    await User.updateOne(
+        { _id: userId },
+        { $pull: { favoriteProductIds: normalizedProductId } }
+    );
+    return { productId: String(normalizedProductId) };
+};
+
 /**
  * Customer: Update own profile (self-service).
  * Only allows safe fields: name, email, phone, username, password.
@@ -385,6 +429,9 @@ module.exports = {
     rejectUser,
     updateUser,
     getMyProfile,
+    getMyFavorites,
+    addMyFavorite,
+    removeMyFavorite,
     updateMyProfile,
     updateMyAvatar,
     resetQuantityUsed,
