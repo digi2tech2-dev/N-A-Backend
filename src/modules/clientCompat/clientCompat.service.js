@@ -6,7 +6,6 @@ const { Category } = require('../categories/category.model');
 const { Order } = require('../orders/order.model');
 const orderService = require('../orders/order.service');
 const { calculateFinalPrice } = require('../orders/pricing.service');
-const { convertUsdToUserCurrency } = require('../../services/currencyConverter.service');
 const { ClientCompatError, ERROR_CODES } = require('./clientCompat.errors');
 const {
     getActiveFields,
@@ -86,13 +85,13 @@ const buildCategoryMaps = (categories) => {
 const priceProduct = async (product, reseller) => {
     const percentage = Number(reseller.groupId?.percentage || 0);
     const priceUsd = calculateFinalPrice(product.basePrice, percentage);
-    const userCurrency = String(reseller.currency || 'USD').toUpperCase();
-    const converted = await convertUsdToUserCurrency(Number(priceUsd), userCurrency);
 
     return {
         priceUsd,
-        price: Number(converted.finalAmount),
-        currency: userCurrency,
+        // Keep the public Canonical catalog in USD. Exact-ledger wallet
+        // accounting and profile currency are deliberately untouched.
+        price: Number(priceUsd),
+        currency: 'USD',
     };
 };
 
