@@ -23,7 +23,6 @@ const { NotFoundError, BusinessRuleError } = require('../shared/errors/AppError'
 const Decimal = require('decimal.js');
 const {
     normalizeDecimalString,
-    normalizePlatformRateExact,
     legacyPlatformRateToExact,
 } = require('../shared/utils/exactLedgerMoney');
 
@@ -150,9 +149,10 @@ const convertUsdDecimalToUserCurrencyExact = async (usdAmount, userCurrency) => 
         .select('code isActive platformRate +platformRateExact');
     if (!currency) throw new NotFoundError(`Currency '${upper}'`);
     if (!currency.isActive) throw new BusinessRuleError(`Currency '${upper}' is currently inactive.`, 'CURRENCY_INACTIVE');
-    const rateExact = currency.platformRateExact
-        ? normalizePlatformRateExact(currency.platformRateExact)
-        : legacyPlatformRateToExact(currency.platformRate);
+    // platformRate is the authoritative economic rate.  Never let a stale
+    // compatibility field select a different rate for an exact ledger debit.
+    const rateExact = legacyPlatformRateToExact(currency.platformRate);
+    const rate = Number(rateExact);
 
     // The compatibility contract bounds USD at 50 fractional digits and the
     // rate at six, so multiplication has at most 56 fractional digits. A
@@ -169,7 +169,7 @@ const convertUsdDecimalToUserCurrencyExact = async (usdAmount, userCurrency) => 
         maxWholeDigits: 129,
         label: 'Converted customer amount',
     });
-    return { usdAmount: normalizedUsd, currency: currency.code, rate: currency.platformRate, rateExact, finalAmount };
+    return { usdAmount: normalizedUsd, currency: currency.code, rate, rateExact, finalAmount };
 };
 
 // =============================================================================

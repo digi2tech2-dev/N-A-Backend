@@ -20,7 +20,12 @@ const {
     connectTestDB, disconnectTestDB, clearCollections,
     createCustomerWithGroup, createProduct,
 } = require('./testHelpers');
-const { convertUsdToUserCurrency, convertUserCurrencyToUsd } =
+const {
+    convertUsdToUserCurrency,
+    convertUserCurrencyToUsd,
+    convertUsdDecimalToUserCurrencyExact,
+    invalidateCurrencyCache,
+} =
     require('../services/currencyConverter.service');
 const { syncRates } = require('../services/exchangeRateSync.service');
 const currencyService = require('../modules/currency/currency.service');
@@ -156,6 +161,41 @@ describe('[3] convertUserCurrencyToUsd', () => {
 });
 
 // =============================================================================
+// [3a] exact conversion source-of-truth protection
+// =============================================================================
+
+describe('[3a] convertUsdDecimalToUserCurrencyExact', () => {
+    it('uses platformRate when an existing row has a stale platformRateExact', async () => {
+        invalidateCurrencyCache('EGP');
+        await makeCurrency({
+            code: 'EGP', name: 'Egyptian Pound', symbol: 'E£', platformRate: 55,
+        });
+        // Simulate the pre-fix production mismatch without Mongoose middleware.
+        await Currency.collection.updateOne(
+            { code: 'EGP' },
+            { $set: { platformRateExact: '53.3' } }
+        );
+
+        const result = await convertUsdDecimalToUserCurrencyExact('0.84013905749917185', 'EGP');
+        expect(result.rate).toBe(55);
+        expect(result.rateExact).toBe('55');
+        expect(Number(result.rateExact)).toBe(result.rate);
+        expect(result.finalAmount).toBe('46.20764816245445175');
+    });
+
+    it('keeps USD at an exact rate of one', async () => {
+        await expect(convertUsdDecimalToUserCurrencyExact('0.84013905749917185', 'USD'))
+            .resolves.toEqual({
+                usdAmount: '0.84013905749917185',
+                currency: 'USD',
+                rate: 1,
+                rateExact: '1',
+                finalAmount: '0.84013905749917185',
+            });
+    });
+});
+
+// =============================================================================
 // [4] exchangeRateSync.service
 // =============================================================================
 
@@ -212,6 +252,7 @@ describe('[5] currency.service admin operations', () => {
         const usd = await Currency.findOne({ code: 'USD' });
         expect(usd).not.toBeNull();
         expect(usd.platformRate).toBe(1);
+        expect((await Currency.findOne({ code: 'USD' }).select('+platformRateExact')).platformRateExact).toBe('1');
         expect(usd.isActive).toBe(true);
     });
 
@@ -222,10 +263,18 @@ describe('[5] currency.service admin operations', () => {
         expect(count).toBe(1);
     });
 
-    it('updateCurrencyRate changes platformRate and invalidates cache', async () => {
-        await makeCurrency({ code: 'SAR', platformRate: 4.00 });
-        const { currency: updated } = await currencyService.updateCurrencyRate('SAR', { platformRate: 4.50 });
-        expect(updated.platformRate).toBeCloseTo(4.50, 4);
+    it('updateCurrencyRate synchronizes the exact rate and invalidates cache', async () => {
+        invalidateCurrencyCache('SAR');
+        await makeCurrency({ code: 'SAR', platformRate: 53.3, platformRateExact: '53.3' });
+        expect((await convertUsdToUserCurrency(1, 'SAR')).rate).toBe(53.3); // populate converter cache
+
+        const { currency: updated } = await currencyService.updateCurrencyRate('SAR', { platformRate: 55 });
+        expect(updated.platformRate).toBe(55);
+        expect((await convertUsdToUserCurrency(1, 'SAR')).rate).toBe(55); // cache was invalidated
+
+        const persisted = await Currency.findOne({ code: 'SAR' }).select('+platformRateExact');
+        expect(persisted.platformRate).toBe(55);
+        expect(persisted.platformRateExact).toBe('55');
     });
 
     it('updateCurrencyRate refuses to change USD rate away from 1', async () => {
@@ -254,7 +303,18 @@ describe('[5] currency.service admin operations', () => {
         });
         expect(c.code).toBe('AED');
         expect(c.platformRate).toBeCloseTo(3.67, 4);
+        expect(c.platformRateExact).toBe('3.67');
         expect(c.isActive).toBe(true);
+    });
+
+    it('keeps platformRateExact synchronized across repeated rate updates', async () => {
+        await makeCurrency({ code: 'QAR', platformRate: 52.5 });
+        for (const rate of [53.3, 55]) {
+            await currencyService.updateCurrencyRate('QAR', { platformRate: rate });
+            const persisted = await Currency.findOne({ code: 'QAR' }).select('+platformRateExact');
+            expect(persisted.platformRate).toBe(rate);
+            expect(persisted.platformRateExact).toBe(String(rate));
+        }
     });
 
     it('createCurrency refuses duplicate codes', async () => {

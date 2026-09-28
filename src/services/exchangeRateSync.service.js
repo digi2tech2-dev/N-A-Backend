@@ -31,6 +31,7 @@ const https = require('https');
 const http = require('http');
 const { Currency } = require('../modules/currency/currency.model');
 const { invalidateCurrencyCache } = require('./currencyConverter.service');
+const { legacyPlatformRateToExact } = require('../shared/utils/exactLedgerMoney');
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -183,6 +184,7 @@ const syncRates = async (options = {}) => {
                     symbol: _getDefaultSymbol(code),
                     marketRate,
                     platformRate,
+                    platformRateExact: legacyPlatformRateToExact(platformRate),
                     markupPercentage: 0,
                     isActive: false,  // auto-created currencies are INACTIVE by default
                     lastUpdatedAt: syncedAt,

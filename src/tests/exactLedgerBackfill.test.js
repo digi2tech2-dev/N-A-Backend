@@ -123,7 +123,7 @@ describe('Phase 2 local exact-ledger backfill', () => {
             users: { scanned: 5, wouldUpdate: 5, updated: 0, skipped: 0 },
             'wallet-transactions': { scanned: 3, wouldUpdate: 3, updated: 0, skipped: 0 },
             orders: { scanned: 2, wouldUpdate: 2, updated: 0, skipped: 0 },
-            currencies: { scanned: 2, wouldUpdate: 2, updated: 0, skipped: 0 },
+            currencies: { scanned: 2, wouldUpdate: 0, updated: 0, skipped: 2 },
         });
         expect((await selected(User.findById(fixture.users[3]._id), exactUserFields)).walletBalanceUnits).toBeNull();
 
@@ -131,7 +131,7 @@ describe('Phase 2 local exact-ledger backfill', () => {
         expect(writeRun.users.updated).toBe(5);
         expect(writeRun['wallet-transactions'].updated).toBe(3);
         expect(writeRun.orders.updated).toBe(2);
-        expect(writeRun.currencies.updated).toBe(2);
+        expect(writeRun.currencies.updated).toBe(0);
 
         const user = await selected(User.findById(fixture.users[3]._id), exactUserFields);
         expect(user.walletBalance).toBe(10.25);

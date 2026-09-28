@@ -122,16 +122,15 @@ describe('exact-ledger admin currency conversion', () => {
         expect((await fresh(user._id)).currency).toBe('EGP');
     });
 
-    test('rejects an invalid persisted non-USD source rate with zero writes', async () => {
+    test('uses authoritative platformRate when a persisted non-USD exact field is invalid', async () => {
         await seedRates();
         const user = await createExactCustomer();
         await Currency.collection.updateOne({ code: 'EGP' }, { $set: { platformRateExact: 'invalid' } });
-        await expect(convertExactWalletCurrencyAtomic({ userId: user._id, targetCurrency: 'USD' }))
-            .rejects.toMatchObject({ code: 'EXACT_LEDGER_SOURCE_CURRENCY_RATE_UNAVAILABLE' });
-        const unchanged = await fresh(user._id);
-        expect(unchanged.currency).toBe('EGP');
-        expect(unchanged.walletLedgerVersion).toBe(7);
-        expect(unitsToDecimalString(unchanged.walletBalanceUnits)).toBe('200');
+        await convertExactWalletCurrencyAtomic({ userId: user._id, targetCurrency: 'USD' });
+        const converted = await fresh(user._id);
+        expect(converted.currency).toBe('USD');
+        expect(converted.walletLedgerVersion).toBe(8);
+        expect(unitsToDecimalString(converted.walletBalanceUnits)).toBe('4');
     });
 
     test('allows migration out of an inactive but valid source currency', async () => {

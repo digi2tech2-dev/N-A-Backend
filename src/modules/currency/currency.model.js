@@ -1,7 +1,11 @@
 'use strict';
 
 const mongoose = require('mongoose');
-const { requireExactStringInput, normalizePlatformRateExact } = require('../../shared/utils/exactLedgerMoney');
+const {
+    requireExactStringInput,
+    normalizePlatformRateExact,
+    legacyPlatformRateToExact,
+} = require('../../shared/utils/exactLedgerMoney');
 
 const isCanonicalPlatformRateExact = (value) => {
     if (value == null) return true;
@@ -114,6 +118,20 @@ const currencySchema = new mongoose.Schema(
 // ─── Indexes ──────────────────────────────────────────────────────────────────
 // code: unique index declared inline (unique: true)
 currencySchema.index({ isActive: 1 });
+
+// Keep the compatibility representation derived from the authoritative Number
+// on every document write. This also covers any Currency.create/new Currency
+// callers that do not explicitly provide platformRateExact.
+currencySchema.pre('validate', function synchronizePlatformRateExact(next) {
+    try {
+        const platformRateExact = legacyPlatformRateToExact(this.platformRate);
+        this.platformRate = Number(platformRateExact);
+        this.platformRateExact = platformRateExact;
+        next();
+    } catch (error) {
+        next(error);
+    }
+});
 
 // ─── Virtuals ─────────────────────────────────────────────────────────────────
 

@@ -20,6 +20,14 @@ const { Currency } = require('./currency.model');
 const { User } = require('../users/user.model');
 const { invalidateCurrencyCache } = require('../../services/currencyConverter.service');
 const { NotFoundError, BusinessRuleError, ConflictError } = require('../../shared/errors/AppError');
+const { legacyPlatformRateToExact } = require('../../shared/utils/exactLedgerMoney');
+
+// platformRate remains the admin-controlled source of truth.  The exact field
+// is its canonical six-decimal representation, never an independent input.
+const canonicalizePlatformRate = (platformRate) => {
+    const platformRateExact = legacyPlatformRateToExact(platformRate);
+    return { platformRate: Number(platformRateExact), platformRateExact };
+};
 
 // =============================================================================
 // SEED: Ensure USD base currency
@@ -34,12 +42,13 @@ const { NotFoundError, BusinessRuleError, ConflictError } = require('../../share
 const seedBaseCurrency = async () => {
     const exists = await Currency.findOne({ code: 'USD' });
     if (!exists) {
+        const rate = canonicalizePlatformRate(1);
         await Currency.create({
             code: 'USD',
             name: 'US Dollar',
             symbol: '$',
             marketRate: 1,
-            platformRate: 1,
+            ...rate,
             markupPercentage: 0,
             isActive: true,
             lastUpdatedAt: new Date(),
@@ -126,7 +135,7 @@ const updateCurrencyRate = async (code, updates) => {
                 'INVALID_PLATFORM_RATE'
             );
         }
-        doc.platformRate = parseFloat(platformRate.toFixed(6));
+        Object.assign(doc, canonicalizePlatformRate(platformRate));
     }
 
     if (markupPercentage !== undefined) {
@@ -236,7 +245,7 @@ const setCurrencyStatus = async (code, isActive) => {
  * @param {Object} data
  * @returns {Promise<Currency>}
  */
-const createCurrency = async ({ code, name, symbol, platformRate, marketRate, markupPercentage }) => {
+const createCurrency = async ({ code, name, symbol, platformRate, marketRate, markupPercentage, isActive = true }) => {
     const upper = (code ?? '').toUpperCase().trim();
     if (!/^[A-Z]{3}$/.test(upper)) {
         throw new BusinessRuleError(
@@ -250,14 +259,15 @@ const createCurrency = async ({ code, name, symbol, platformRate, marketRate, ma
         throw new ConflictError(`Currency '${upper}' already exists.`);
     }
 
+    const rate = canonicalizePlatformRate(platformRate ?? 1);
     const doc = await Currency.create({
         code: upper,
         name,
         symbol,
         marketRate: marketRate ?? null,
-        platformRate: parseFloat((platformRate || 1).toFixed(6)),
+        ...rate,
         markupPercentage: markupPercentage ?? 0,
-        isActive: true,
+        isActive: isActive !== false,
         lastUpdatedAt: new Date(),
     });
 

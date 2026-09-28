@@ -126,6 +126,35 @@ describe('Phase 3 exact customer-ledger execution gate', () => {
         expect(unitsToDecimalString(decimalStringToUnits(result.finalAmount))).toBe(result.finalAmount);
     });
 
+    test('exact orders snapshot and debit the same authoritative currency rate', async () => {
+        process.env.EXACT_LEDGER_ENABLED = 'true';
+        await Currency.create({ code: 'EGP', name: 'Egyptian Pound', symbol: 'E£', platformRate: 55 });
+        // This is an existing pre-fix row: display rate is current, hidden rate is stale.
+        await Currency.collection.updateOne({ code: 'EGP' }, { $set: { platformRateExact: '53.3' } });
+        const group = await createGroup({ percentage: 0 });
+        const user = await createCustomer({ groupId: group._id, currency: 'EGP', walletBalance: 100 });
+        const product = await createProduct({
+            basePrice: '0.84013905749917185', minQty: 1, maxQty: 10, executionType: 'manual',
+        });
+
+        const { order } = await createOrder({
+            userId: user._id,
+            productId: product._id,
+            quantity: 1,
+            idempotencyKey: `exact-authoritative-rate:${user._id}`,
+        });
+        const persisted = await Order.findById(order._id)
+            .select('+chargedAmountUnits +walletDeductedUnits');
+        const debit = await WalletTransaction.findOne({ userId: user._id, type: TRANSACTION_TYPES.DEBIT })
+            .select(txExactFields);
+
+        expect(persisted.rateSnapshot).toBe(55);
+        expect(persisted.totalPrice).toBe('46.20764816245445175');
+        expect(unitsToDecimalString(persisted.chargedAmountUnits)).toBe(persisted.totalPrice);
+        expect(unitsToDecimalString(persisted.walletDeductedUnits)).toBe(persisted.totalPrice);
+        expect(unitsToDecimalString(debit.amountUnits)).toBe(persisted.totalPrice);
+    });
+
     test('concurrent micro debits serialize through the exact ledger version without a lost update', async () => {
         process.env.EXACT_LEDGER_ENABLED = 'true';
         const group = await createGroup();

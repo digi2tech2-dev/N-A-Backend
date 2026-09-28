@@ -110,9 +110,9 @@ const resolveExactCurrencyRate = async (currencyCode, { session, requireActive, 
     }
 
     try {
-        const rateExact = typeof currency.platformRateExact === 'string' && currency.platformRateExact.trim()
-            ? normalizePlatformRateExact(currency.platformRateExact)
-            : legacyPlatformRateToExact(currency.platformRate);
+        // The Number field is the source of truth. Existing stale exact fields
+        // must not change the denomination used for a wallet conversion.
+        const rateExact = legacyPlatformRateToExact(currency.platformRate);
         return { code, rateExact };
     } catch (_) {
         throw new BusinessRuleError(
