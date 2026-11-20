@@ -145,6 +145,9 @@ const registry = new Map([
     ['top1 store', AlkasrVipAdapter], // name
     ['top1store', AlkasrVipAdapter],  // compact
 
+  ['revar-7', AlkasrVipAdapter], // slug
+  ['revar7', AlkasrVipAdapter], // mame
+
 
     // -- Ibra Store ------------------------------------------------------------
     ['ibra-store', IbraAdapter],
