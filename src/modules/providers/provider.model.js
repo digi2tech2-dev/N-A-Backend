@@ -108,6 +108,17 @@ const providerSchema = new mongoose.Schema(
     },
     {
         timestamps: true,
+        toJSON: {
+            transform(_document, value) {
+                // Provider credentials are server-side secrets. Never include
+                // them in API responses, even on admin-only endpoints.
+                delete value.apiToken;
+                delete value.apiKey;
+                delete value.effectiveToken;
+                value.hasApiToken = Boolean(_document.apiToken || _document.apiKey);
+                return value;
+            },
+        },
     }
 );
 

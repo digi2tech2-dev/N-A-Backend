@@ -38,6 +38,7 @@ router.get('/', controller.listProviders);
  */
 router.post(
     '/',
+    authorize('ADMIN'),
     createProviderValidation, validate,
     controller.createProvider
 );
@@ -58,6 +59,7 @@ router.get(
  */
 router.patch(
     '/:id',
+    authorize('ADMIN'),
     updateProviderValidation, validate,
     controller.updateProvider
 );

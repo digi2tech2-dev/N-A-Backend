@@ -44,7 +44,7 @@ const issue = async (userId, extra = {}, mfaVerified = false) => {
     const user = await User.findById(userId);
     if (!user || user.deletedAt || user.blockedAt || user.status !== 'ACTIVE' || (user.isTwoFactorEnabled && !mfaVerified)) throw new AuthenticationError('Login verification required.');
     return jwt.sign({ ...extra, id: String(user._id), role: user.role, purpose: 'access', sv: String(user.sessionVersion || '0'), mfa: Boolean(user.isTwoFactorEnabled && mfaVerified) }, config.jwt.secret,
-        { algorithm: 'HS256', expiresIn: '15m', jwtid: crypto.randomUUID() });
+        { algorithm: 'HS256', expiresIn: config.jwt.expiresIn, jwtid: crypto.randomUUID() });
 };
 const exchange = async (tempToken, code) => {
     const { User } = require('../../modules/users/user.model');

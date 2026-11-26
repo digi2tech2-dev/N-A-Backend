@@ -270,7 +270,7 @@ router.patch(
 // ═══════════════════════════════════════════════════════════════════════════════
 
 router.get('/providers', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.listProviders);
-router.post('/providers', requirePermission('MANAGE_SUPPLIERS'), validateBody(schemas.createProvider), providersCtrl.createProvider);
+router.post('/providers', adminOnly, requirePermission('MANAGE_SUPPLIERS'), validateBody(schemas.createProvider), providersCtrl.createProvider);
 // sub-resource actions BEFORE /:id to avoid param collision
 router.get('/providers/:id/balance', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.getProviderBalance);
 router.get('/providers/:id/products', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.getProviderLiveProducts);
@@ -298,9 +298,9 @@ router.get('/providers/:id/inchill/diagnostics/profile', requirePermission('MANA
 router.get('/providers/:id/inchill/diagnostics/wallet', requirePermission('MANAGE_SUPPLIERS'), inchillConnectionCtrl.getWalletBalance);
 router.post('/providers/:id/inchill/diagnostics/verify-target', requirePermission('MANAGE_SUPPLIERS'), inchillConnectionCtrl.verifyTarget);
 router.get('/providers/:providerId/products/:externalProductId/price', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.getProductPrice);
-router.patch('/providers/:id/toggle', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.toggleProvider);
+router.patch('/providers/:id/toggle', adminOnly, requirePermission('MANAGE_SUPPLIERS'), providersCtrl.toggleProvider);
 router.get('/providers/:id', requirePermission('MANAGE_SUPPLIERS'), providersCtrl.getProviderById);
-router.patch('/providers/:id', requirePermission('MANAGE_SUPPLIERS'), validateBody(schemas.updateProvider), providersCtrl.updateProvider);
+router.patch('/providers/:id', adminOnly, requirePermission('MANAGE_SUPPLIERS'), validateBody(schemas.updateProvider), providersCtrl.updateProvider);
 router.delete('/providers/:id', adminOnly, requirePermission('MANAGE_SUPPLIERS'), providersCtrl.deleteProvider);
 
 // ═══════════════════════════════════════════════════════════════════════════════

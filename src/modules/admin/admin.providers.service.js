@@ -53,7 +53,7 @@ const updateProvider = async (id, data, adminId) => {
     const provider = await Provider.findById(id);
     if (!provider) throw new NotFoundError('Provider');
 
-    const before = provider.toObject();
+    const before = { name: provider.name, slug: provider.slug, adapterType: provider.adapterType, baseUrl: provider.baseUrl, isActive: provider.isActive, syncInterval: provider.syncInterval, supportedFeatures: provider.supportedFeatures, hasApiToken: Boolean(provider.apiToken || provider.apiKey) };
     const { name, slug, adapterType, baseUrl, apiToken, isActive, syncInterval, supportedFeatures } = data;
 
     if (name !== undefined) provider.name = name;
@@ -73,7 +73,7 @@ const updateProvider = async (id, data, adminId) => {
         action: ADMIN_ACTIONS.PROVIDER_UPDATED,
         entityType: ENTITY_TYPES.PROVIDER,
         entityId: provider._id,
-        metadata: { before, after: provider.toObject() },
+        metadata: { before, after: { name: provider.name, slug: provider.slug, adapterType: provider.adapterType, baseUrl: provider.baseUrl, isActive: provider.isActive, syncInterval: provider.syncInterval, supportedFeatures: provider.supportedFeatures, hasApiToken: Boolean(provider.apiToken || provider.apiKey) } },
     });
 
     return provider;
@@ -93,7 +93,8 @@ const deleteProvider = async (id, adminId) => {
         metadata: { name: provider.name, detachedProducts },
     });
 
-    return { ...provider.toObject(), detachedProducts };
+    const safeProvider = provider.toJSON();
+    return { ...safeProvider, detachedProducts };
 };
 
 // ─── Toggle Active ────────────────────────────────────────────────────────────
