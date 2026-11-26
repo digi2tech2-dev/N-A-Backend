@@ -21,6 +21,19 @@ const { Order } = require('../modules/orders/order.model');
 const { TargetApp } = require('../modules/targets/target.model');
 
 const CLEAR_FLAG = process.argv.includes('--clear');
+const IS_PRODUCTION = config.env === 'production';
+
+if (IS_PRODUCTION && CLEAR_FLAG) {
+    throw new Error('The destructive seed:clear operation is disabled in production.');
+}
+
+const productionAdminEmail = String(process.env.SEED_ADMIN_EMAIL || '').trim().toLowerCase();
+const productionAdminPassword = String(process.env.SEED_ADMIN_PASSWORD || '');
+if (IS_PRODUCTION && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(productionAdminEmail)
+    || Buffer.byteLength(productionAdminPassword) < 16
+    || Buffer.byteLength(productionAdminPassword) > 72)) {
+    throw new Error('Production seeding requires SEED_ADMIN_EMAIL and a SEED_ADMIN_PASSWORD of 16–72 bytes.');
+}
 
 const seed = async () => {
     try {
@@ -62,22 +75,34 @@ const seed = async () => {
 
         // 2. Create Admin User
         // Admins are assigned the Standard group (lowest markup) by convention.
-        const adminExists = await User.findOne({ email: 'admin@platform.com' });
+        const adminEmail = IS_PRODUCTION ? productionAdminEmail : 'admin@platform.com';
+        const adminExists = await User.findOne({ email: adminEmail });
         let admin;
         if (!adminExists) {
             admin = await User.create({
                 name: 'Platform Admin',
-                email: 'admin@platform.com',
-                password: 'Admin@1234',
+                email: adminEmail,
+                password: IS_PRODUCTION ? productionAdminPassword : 'Admin@1234',
                 role: ROLES.ADMIN,
+                status: USER_STATUS.ACTIVE,
+                verified: true,
                 groupId: standardGroup._id,
                 walletBalance: 0,
                 creditLimit: 0,
             });
-            console.log('Admin created: admin@platform.com / Admin@1234');
+            console.log(`Admin created: ${adminEmail}`);
         } else {
             admin = adminExists;
+            if (IS_PRODUCTION && admin.role !== ROLES.ADMIN) {
+                throw new Error('SEED_ADMIN_EMAIL already belongs to a non-admin account.');
+            }
             console.log(`Admin already exists (id: ${admin._id})`);
+        }
+
+        // Demo accounts and fixtures must never be inserted into production.
+        if (IS_PRODUCTION) {
+            console.log('Production bootstrap completed. Demo users, products, and target apps were skipped.');
+            process.exit(0);
         }
 
         // 3. Create Supervisor User

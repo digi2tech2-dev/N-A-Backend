@@ -13,7 +13,7 @@
  *   LOGIN BLOCKING
  *   4.  PENDING user cannot log in
  *   5.  REJECTED user cannot log in
- *   6.  ACTIVE user can log in and receives a JWT
+ *   6.  ACTIVE user receives an MFA challenge instead of a JWT
  *   7.  Wrong password still returns generic error (not status-specific)
  *   8.  Non-existent email returns generic error (timing-safe)
  *
@@ -148,7 +148,7 @@ describe('Login blocking', () => {
         ).rejects.toMatchObject({ statusCode: 401 });
     });
 
-    it('ACTIVE user can log in and receives a JWT', async () => {
+    it('ACTIVE user must complete email MFA before receiving a JWT', async () => {
         await createCustomer({
             groupId: group._id, status: USER_STATUS.ACTIVE,
             email: 'active@test.com', password: 'pass12345'
@@ -159,9 +159,9 @@ describe('Login blocking', () => {
         // The password stored is hashed — the comparePassword method handles this.
         const result = await login({ email: 'active@test.com', password: 'pass12345' });
 
-        expect(result.token).toBeDefined();
-        expect(typeof result.token).toBe('string');
-        expect(result.user.status).toBe(USER_STATUS.ACTIVE);
+        expect(result.requires2FA).toBe(true);
+        expect(result.tempToken).toBeDefined();
+        expect(result.token).toBeUndefined();
     });
 
     it('wrong password for ACTIVE user returns generic 401 (not status message)', async () => {
@@ -359,7 +359,7 @@ describe('Full lifecycle flows', () => {
         admin = await createAdmin();
     });
 
-    it('register → verify email → login succeeds with JWT', async () => {
+    it('register → verify email → login returns an MFA challenge', async () => {
         const email = uniqueEmail();
         const password = 'ValidPass@1';
         await register({ name: 'User', email, password });
@@ -371,8 +371,9 @@ describe('Full lifecycle flows', () => {
         expect(activeUser.status).toBe(USER_STATUS.ACTIVE);
 
         // Now login should succeed (ACTIVE + verified)
-        const { token } = await login({ email, password });
-        expect(token).toBeDefined();
+        const result = await login({ email, password });
+        expect(result.requires2FA).toBe(true);
+        expect(result.token).toBeUndefined();
     });
 
     it('ACTIVE → reject → login blocked', async () => {
@@ -385,9 +386,9 @@ describe('Full lifecycle flows', () => {
             password: 'ValidPass@1',
         });
 
-        // Login works before rejection
-        const { token: beforeToken } = await login({ email, password: 'ValidPass@1' });
-        expect(beforeToken).toBeDefined();
+        // Login reaches MFA before rejection.
+        const beforeChallenge = await login({ email, password: 'ValidPass@1' });
+        expect(beforeChallenge.requires2FA).toBe(true);
 
         // Admin rejects
         await userService.rejectUser(customer._id, admin._id);
@@ -398,7 +399,7 @@ describe('Full lifecycle flows', () => {
         ).rejects.toMatchObject({ statusCode: 401 });
     });
 
-    it('register → reject → login blocked → re-approve → login succeeds', async () => {
+    it('register → reject → login blocked → re-approve → login returns MFA challenge', async () => {
         const email = uniqueEmail();
         await register({ name: 'User', email, password: 'ValidPass@1' });
 
@@ -416,8 +417,9 @@ describe('Full lifecycle flows', () => {
 
         // Admin re-approves
         await userService.approveUser(user._id, admin._id);
-        const { token } = await login({ email, password: 'ValidPass@1' });
-        expect(token).toBeDefined();
+        const result = await login({ email, password: 'ValidPass@1' });
+        expect(result.requires2FA).toBe(true);
+        expect(result.token).toBeUndefined();
     });
 });
 

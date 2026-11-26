@@ -98,7 +98,7 @@ describe('native Google ID-token verification', () => {
 });
 
 describe('native Google account and session rules', () => {
-    it('logs an existing Google-linked user in through the normal JWT path', async () => {
+    it('requires email MFA for an existing Google-linked user', async () => {
         const group = await createGroup({ name: 'NativeGoogleExisting' });
         const payload = verifiedPayload();
         const existing = await User.create({
@@ -116,8 +116,10 @@ describe('native Google account and session rules', () => {
 
         const result = await loginWithNativeGoogle({ idToken: 'existing-user-token' });
 
-        expect(result.token).toEqual(expect.any(String));
-        expect(result.user._id.toString()).toBe(existing._id.toString());
+        expect(result.requires2FA).toBe(true);
+        expect(result.tempToken).toEqual(expect.any(String));
+        expect(result.token).toBeUndefined();
+        expect((await User.findById(existing._id)).isTwoFactorEnabled).toBe(true);
     });
 
     it('uses the existing verified-email linking behavior without accepting client roles', async () => {
@@ -143,7 +145,9 @@ describe('native Google account and session rules', () => {
         });
         const linked = await User.findById(existing._id);
 
-        expect(result.token).toEqual(expect.any(String));
+        expect(result.requires2FA).toBe(true);
+        expect(result.tempToken).toEqual(expect.any(String));
+        expect(result.token).toBeUndefined();
         expect(linked.googleId).toBe(payload.sub);
         expect(linked.role).toBe(ROLES.CUSTOMER);
         expect(linked.status).toBe(USER_STATUS.ACTIVE);

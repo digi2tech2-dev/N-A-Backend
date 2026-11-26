@@ -30,7 +30,7 @@ describe('Hot fix: private receipt ownership over HTTP', () => {
     const request = async (id, role = 'CUSTOMER', permissions = []) => {
         jest.spyOn(User, 'findById').mockResolvedValue({ _id: id, role, permissions, status: 'ACTIVE' });
         jest.spyOn(DepositRequest, 'findOne').mockReturnValue({ select: async () => ({ userId: 'owner' }) });
-        const token = jwt.sign({ id, purpose: 'access', sv: '0' }, process.env.JWT_SECRET);
+        const token = jwt.sign({ id, purpose: 'access', sv: '0', mfa: true }, process.env.JWT_SECRET);
         return fetch(url, { headers: { Authorization: `Bearer ${token}` } });
     };
     test('anonymous requests fail before reading evidence', async () => expect((await fetch(url)).status).toBe(401));

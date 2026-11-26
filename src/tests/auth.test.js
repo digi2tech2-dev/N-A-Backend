@@ -379,12 +379,13 @@ describe('[4] Login gates', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('[5] Login success', () => {
-    it('issues a JWT when verified + ACTIVE + correct password', async () => {
+    it('requires email MFA when verified + ACTIVE + correct password', async () => {
         const group = await createGroup({ name: 'Success', percentage: 0 });
         const user = await createCustomer({
             groupId: group._id,
             status: USER_STATUS.ACTIVE,
             verified: true,
+            isTwoFactorEnabled: false,
         });
 
         // Re-set password via the model's pre-save hook
@@ -393,11 +394,12 @@ describe('[5] Login success', () => {
         fresh.password = raw;
         await fresh.save();
 
+        jest.spyOn(emailService, 'sendTwoFactorOtpEmail').mockResolvedValue();
         const result = await login({ email: user.email, password: raw });
-        expect(result.token).toBeDefined();
-        expect(typeof result.token).toBe('string');
-        expect(result.token.split('.')).toHaveLength(3);   // JWT has 3 parts
-        expect(result.user.password).toBeUndefined();
+        expect(result.requires2FA).toBe(true);
+        expect(result.tempToken).toBeDefined();
+        expect(result.token).toBeUndefined();
+        expect((await User.findById(user._id)).isTwoFactorEnabled).toBe(true);
     });
 });
 
@@ -514,6 +516,7 @@ describe('[6] Email OTP 2FA', () => {
             groupId: group._id,
             status: USER_STATUS.ACTIVE,
             verified: true,
+            isTwoFactorEnabled: false,
         });
 
         const fresh = await User.findById(user._id);

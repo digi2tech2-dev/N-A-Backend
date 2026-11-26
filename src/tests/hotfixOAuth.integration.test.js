@@ -59,12 +59,12 @@ test('expired grants cannot be exchanged and malformed starts are rejected',asyn
     expect((await send(code,verifier)).status).toBe(401);
     await expect(handoff.begin({query:{}})).rejects.toThrow();
 });
-test('Google can issue an ordinary session only after valid tab proof',async()=>{
+test('Google issues an email MFA challenge only after valid tab proof',async()=>{
     const current=await User.findById(owner._id);current.isTwoFactorEnabled=false;await current.save();
     const {code,verifier}=await start();
     const response=await send(code,verifier);expect(response.status).toBe(200);
-    const result=await response.json();expect(typeof result.data.token).toBe('string');
-    const payload=require('jsonwebtoken').verify(result.data.token,process.env.JWT_SECRET);
-    expect(payload.purpose).toBe('access');
-    expect(payload.id).toBe(String(owner._id));
+    const result=await response.json();
+    expect(result.data.requires2FA).toBe(true);
+    expect(typeof result.data.tempToken).toBe('string');
+    expect(result.data.token).toBeUndefined();
 });

@@ -585,8 +585,9 @@ describe('Google profile completion', () => {
         await fresh.save();
 
         const result = await login({ email: fresh.email, password: 'SecurePass@1' });
-        expect(result.token).toBeDefined();
-        expect(result.user.referralCode).toBe(fresh.referralCode);
+        expect(result.requires2FA).toBe(true);
+        expect(result.token).toBeUndefined();
+        expect((await User.findById(fresh._id)).referralCode).toBe(fresh.referralCode);
     });
 
     it('requires profile completion for a brand-new Google account before issuing a final token', async () => {
@@ -621,7 +622,7 @@ describe('Google profile completion', () => {
         expect(user.profileCompletionRequired).toBe(true);
     });
 
-    it('lets existing completed Google users log in directly', async () => {
+    it('requires email MFA for existing completed Google users', async () => {
         await seedCurrency();
         const group = await createGroup({ name: 'ExistingCompleteGoogleGroup', percentage: 0 });
         const user = await createCustomer({
@@ -634,8 +635,9 @@ describe('Google profile completion', () => {
         });
 
         const result = await loginWithGoogle(user);
-        expect(result.status).toBe('LOGIN_COMPLETE');
-        expect(result.token).toBeDefined();
+        expect(result.requires2FA).toBe(true);
+        expect(result.tempToken).toBeDefined();
+        expect(result.token).toBeUndefined();
     });
 
     it('returns existing incomplete Google users to completion', async () => {
@@ -680,11 +682,12 @@ describe('Google profile completion', () => {
             currency: 'usd',
         });
 
-        expect(completed.status).toBe('LOGIN_COMPLETE');
-        expect(completed.token).toBeDefined();
-        expect(completed.user.profileCompletionRequired).toBe(false);
+        expect(completed.requires2FA).toBe(true);
+        expect(completed.tempToken).toBeDefined();
+        expect(completed.token).toBeUndefined();
 
         const fresh = await User.findById(user._id).select('+profileCompletionToken +profileCompletionTokenExpires');
+        expect(fresh.profileCompletionRequired).toBe(false);
         expect(fresh.profileCompletedAt).toBeInstanceOf(Date);
         expect(fresh.profileCompletionToken).toBeNull();
         expect(fresh.profileCompletionTokenExpires).toBeNull();

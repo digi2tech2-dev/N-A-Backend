@@ -16,16 +16,16 @@ const customer = async extra => {
 };
 test('password changes invalidate a previously valid JWT', async () => {
     const user = await customer();
-    const token = await session.issue(user._id);
+    const token = await session.issue(user._id, {}, true);
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    expect(decoded.exp - decoded.iat).toBe(900);
+    expect(decoded.exp - decoded.iat).toBe(3600);
     expect(() => session.validate(decoded, user)).not.toThrow();
     user.password = 'ReplacementPassword123!'; await user.save();
     expect(() => session.validate(decoded, user)).toThrow();
 });
 test('a role change through a query invalidates the original JWT', async () => {
     const user = await customer();
-    const decoded = jwt.verify(await session.issue(user._id), process.env.JWT_SECRET);
+    const decoded = jwt.verify(await session.issue(user._id, {}, true), process.env.JWT_SECRET);
     const updated = await User.findByIdAndUpdate(user._id, { $set: { role: 'SUPERVISOR' } }, { new: true });
     expect(() => session.validate(decoded, updated)).toThrow();
 });
@@ -53,7 +53,7 @@ test('legacy tokens and direct access-token minting cannot bypass MFA', async ()
 });
 test('financial aggregation pipelines remain available without revoking sessions', async () => {
     const user = await customer({ walletBalance: 100 });
-    const decoded = jwt.verify(await session.issue(user._id), process.env.JWT_SECRET);
+    const decoded = jwt.verify(await session.issue(user._id, {}, true), process.env.JWT_SECRET);
     const updated = await User.findByIdAndUpdate(user._id, [{ $set: { walletBalance: { $add: ['$walletBalance', 5] } } }], { new: true });
     expect(updated.walletBalance).toBe(105);
     expect(() => session.validate(decoded, updated)).not.toThrow();
