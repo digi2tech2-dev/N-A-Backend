@@ -15,7 +15,7 @@ const { normalizeProviderDecimalPrice } = require('../../shared/utils/decimalPre
 // =============================================================================
 
 const createProvider = async ({ name, baseUrl, apiKey, apiToken, adapterType, syncInterval, isActive }) => {
-    const existing = await Provider.findOne({ name: new RegExp(`^${name}$`, 'i') });
+    const existing = await Provider.findOne({ name: new RegExp(`^${require('../../shared/utils/literalSearch')(name)}$`, 'i') });
     if (existing) throw new ConflictError(`A provider named '${name}' already exists.`);
 
     return Provider.create({ name, baseUrl, apiKey, apiToken, adapterType, syncInterval, isActive });

@@ -125,6 +125,7 @@ const adminOnly = authorize('ADMIN');
 
 // ─── Auth guard — applied to every route in this router ──────────────────────
 router.use(authenticate);
+router.use('/users/:id', require('../../shared/middlewares/accountMutation'));
 router.use(authorize('ADMIN', 'SUPERVISOR'));
 
 const attachTargetAppImage = (req, _res, next) => {
@@ -170,8 +171,8 @@ const validateReferralPayoutPaidBody = (req, res, next) => {
 // DASHBOARD STATISTICS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.get('/dashboard/stats', statsCtrl.getDashboardStats);
-router.get('/stats', statsCtrl.getDashboardStats);
+router.get('/dashboard/stats', adminOnly, statsCtrl.getDashboardStats);
+router.get('/stats', adminOnly, statsCtrl.getDashboardStats);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // USERS
@@ -388,7 +389,7 @@ router.post('/currencies', adminOnly, validateBody(schemas.createCurrency), catc
 // GROUPS  (thin proxy — full controller lives in groups module)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-router.get('/groups', catchAsync(async (req, res) => {
+router.get('/groups', requirePermission('MANAGE_GROUPS'), catchAsync(async (req, res) => {
     const groups = await groupSvc.listGroups({ includeInactive: true });
     sendSuccess(res, { groups }, 'Groups retrieved');
 }));

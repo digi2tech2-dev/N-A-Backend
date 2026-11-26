@@ -34,7 +34,7 @@ class CanonicalB2BAdapter extends BaseProviderAdapter {
         const baseURL = normaliseBaseUrl(provider.baseUrl);
         if (!baseURL) throw new Error('[CanonicalB2B] provider.baseUrl is required');
         if (!token) throw new Error('[CanonicalB2B] api token is required');
-        this._client = options.httpClient || axios.create({
+        this._client = options.httpClient || require('../../../shared/utils/safeProviderHttp').create({
             baseURL, timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
             headers: { 'api-token': token, 'Content-Type': 'application/json', Accept: 'application/json' },
         });

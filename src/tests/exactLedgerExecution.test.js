@@ -206,8 +206,8 @@ describe('Phase 3 exact customer-ledger execution gate', () => {
         const admin = await createAdmin();
         const user = await createCustomer({ groupId: group._id, walletBalance: 1 });
         await debitExactWalletAtomic({ userId: user._id, expectedCurrency: user.currency, decimal: '0.0001', sourceKey: `seed-micro:${user._id}` });
-        await adminWalletService.addFunds(user._id, 1, 'admin credit', admin._id);
-        await adminWalletService.deductFunds(user._id, 0.5, 'admin debit', admin._id);
+        await adminWalletService.addFunds(user._id, 1, 'admin credit', admin._id, 'exact-admin-credit');
+        await adminWalletService.deductFunds(user._id, 0.5, 'admin debit', admin._id, 'exact-admin-debit');
         await creditWalletDirect({ userId: user._id, expectedCurrency: user.currency, amount: 0.25, sourceType: 'DEPOSIT', sourceKey: `deposit:${user._id}` });
         await creditWalletDirect({ userId: user._id, expectedCurrency: user.currency, amount: 0.25, sourceType: 'REFERRAL_PAYOUT', sourceKey: `referral:${user._id}` });
         const fresh = await User.findById(user._id).select(exactFields);
@@ -225,7 +225,8 @@ describe('Phase 3 exact customer-ledger execution gate', () => {
         const group = await createGroup();
         const admin = await createAdmin();
         const user = await createCustomer({ groupId: group._id, currency: 'EGP', walletBalance: 5 });
-        const result = await adminWalletService.setBalance(user._id, 3, 'admin set', admin._id);
+        await Currency.create({ code: 'EGP', name: 'Egyptian Pound', symbol: 'EGP', platformRate: 50, isActive: true });
+        const result = await adminWalletService.setBalance(user._id, 3, 'admin set', admin._id, 'exact-admin-set');
         expect(result.transaction.currency).toBe('EGP');
     });
 

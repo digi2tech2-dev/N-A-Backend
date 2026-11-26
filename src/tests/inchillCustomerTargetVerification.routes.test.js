@@ -37,7 +37,7 @@ const requestJson = (method, path, { token, body } = {}) => new Promise((resolve
     req.end();
 });
 
-const tokenFor = (user) => jwt.sign({ id: user._id.toString() }, config.jwt.secret, { expiresIn: '5m' });
+const tokenFor = (user) => jwt.sign({ id: user._id.toString(), purpose: 'access', sv: String(user.sessionVersion || '0') }, config.jwt.secret, { expiresIn: '5m' });
 
 beforeAll(async () => {
     await connectTestDB();

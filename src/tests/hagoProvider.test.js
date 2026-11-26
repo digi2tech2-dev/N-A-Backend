@@ -17,6 +17,7 @@ const {
 } = require('./testHelpers');
 
 const makeHttpClient = () => ({
+    interceptors: { request: { use: jest.fn() } },
     get: jest.fn(),
     post: jest.fn(),
 });
@@ -39,6 +40,7 @@ afterAll(async () => {
 beforeEach(async () => {
     await clearCollections();
     jest.clearAllMocks();
+    axios.create.mockImplementation(() => makeHttpClient());
 });
 
 describe('Hago V2 client (read-only)', () => {

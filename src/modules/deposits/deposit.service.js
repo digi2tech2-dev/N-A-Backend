@@ -136,6 +136,7 @@ const createDepositRequest = async ({
     paymentTransactionId = null,
     auditContext = null,
 }) => {
+    await require('../../shared/utils/depositLimits').checkAmount(requestedAmount, currency);
     // Confirm user exists (belt-and-suspenders — middleware already checks ACTIVE)
     const user = await User.findById(userId).select('_id role name email');
     if (!user) throw new NotFoundError('User');
@@ -247,6 +248,10 @@ const approveDeposit = async (depositId, adminId, adminOverrides = {}, auditCont
     // Pre-read to give clear error messages if status is already wrong
     existing = await DepositRequest.findById(depositId).session(session);
     if (!existing) throw new NotFoundError('DepositRequest');
+    require('../../shared/utils/depositReviewPolicy').immutableAmount(existing, adminOverrides);
+    await require('../../shared/utils/depositLimits').checkAmount(existing.requestedAmount, existing.currency);
+    const approvalActorId = adminId ?? (auditContext?.actorRole === 'SYSTEM' ? auditContext.actorId : null);
+    await require('../../shared/utils/depositLimits').checkReviewer(approvalActorId, existing, adminOverrides);
 
     if (existing.status === DEPOSIT_STATUS.APPROVED) {
         throw new BusinessRuleError(
@@ -630,6 +635,7 @@ const getDepositById = async (depositId, requestingUserId = null) => {
  * @returns {Promise<DepositRequest>}
  */
 const updatePendingDeposit = async (depositId, data, adminId) => {
+    require('../../shared/utils/depositReviewPolicy').immutableUpdate(data);
     const deposit = await DepositRequest.findById(depositId);
     if (!deposit) throw new NotFoundError('Deposit request');
 

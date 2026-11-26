@@ -34,7 +34,7 @@ class InchillClient {
         this.baseUrl = String(options.baseUrl ?? process.env.INCHILL_API_BASE_URL ?? DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
         this.apiKey = options.apiKey ?? process.env.INCHILL_INTERNAL_API_KEY ?? '';
         this.timeout = Number(options.timeoutMs ?? process.env.INCHILL_API_TIMEOUT_MS) || DEFAULT_TIMEOUT_MS;
-        this.http = options.httpClient ?? axios.create({ baseURL: this.baseUrl, timeout: this.timeout, headers: { Accept: 'application/json', 'Content-Type': 'application/json' } });
+        this.http = options.httpClient ?? require('../../../shared/utils/safeProviderHttp').create({ baseURL: this.baseUrl, timeout: this.timeout, headers: { Accept: 'application/json', 'Content-Type': 'application/json' } });
     }
 
     _headers(extra = {}) {

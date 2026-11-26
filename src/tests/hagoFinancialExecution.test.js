@@ -1,6 +1,11 @@
 'use strict';
 
-jest.mock('axios');
+jest.mock('axios', () => ({
+    create: jest.fn(() => ({
+        interceptors: { request: { use: jest.fn() } },
+        get: jest.fn(), post: jest.fn(),
+    })),
+}));
 
 const axios = require('axios');
 const { Provider } = require('../modules/providers/provider.model');

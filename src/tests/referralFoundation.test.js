@@ -564,7 +564,7 @@ describe('Google profile completion', () => {
         await expect(userService.updateMyProfile(googleUser._id, {
             country: 'US',
             currency: 'EUR',
-        })).rejects.toMatchObject({ code: 'CURRENCY_INACTIVE' });
+        })).rejects.toMatchObject({ code: 'CUSTOMER_CURRENCY_CHANGE_DISABLED' });
 
         await expect(userService.updateMyProfile(googleUser._id, {
             referralCode: otherReferrer.referralCode,

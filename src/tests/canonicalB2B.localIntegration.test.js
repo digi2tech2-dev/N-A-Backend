@@ -34,12 +34,17 @@ const rawGet = (path, token) => new Promise((resolve, reject) => {
 
 beforeAll(async () => {
     await connectTestDB();
+    // This suite exercises the canonical protocol over a real loopback socket.
+    // Destination rejection is covered independently by hotfixSsrf.unit.test.js.
+    jest.spyOn(require('../shared/utils/safeProviderHttp'), 'create')
+        .mockImplementation(defaults => axios.create(defaults));
     app = require('../app');
     await new Promise((resolve) => { server = app.listen(0, '127.0.0.1', resolve); });
     upstreamBase = `http://127.0.0.1:${server.address().port}/client/api`;
 });
 afterAll(async () => {
     if (server) await new Promise((resolve) => server.close(resolve));
+    jest.restoreAllMocks();
     await disconnectTestDB();
 });
 beforeEach(async () => clearCollections());

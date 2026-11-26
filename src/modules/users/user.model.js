@@ -568,6 +568,8 @@ userSchema.virtual('profileCompletionRequired').get(function () {
 });
 
 // ─── Pre-save Hook: Hash Password ────────────────────────────────────────────
+require('../../shared/utils/apiTokenIndex')(userSchema);
+require('../../shared/utils/sessionControl').install(userSchema);
 userSchema.pre('validate', function (next) {
     if (this.isNew && !this.referralCode) {
         this.referralCode = generateReferralCode();
@@ -635,6 +637,7 @@ userSchema.methods.toSafeObject = function () {
     delete obj.twoFactorOtpExpires;
     delete obj.profileCompletionToken;
     delete obj.profileCompletionTokenExpires;
+    delete obj.apiTokenLookupHash;
     delete obj.apiToken;
     delete obj.apiSecret;
     return obj;

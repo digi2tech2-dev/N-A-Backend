@@ -15,6 +15,7 @@ const ENV_KEYS = [
 
 let originalEnv;
 let tempRoots;
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 
 const restoreEnv = () => {
     for (const key of ENV_KEYS) {
@@ -72,7 +73,7 @@ describe('WhatsApp runtime physical path containment', () => {
         const linkedRoot = path.join(owner, 'linked-runtime');
         const outsideFile = path.join(outside, 'preserve.txt');
         await fs.writeFile(outsideFile, 'keep');
-        await fs.symlink(outside, linkedRoot, 'dir');
+        await fs.symlink(outside, linkedRoot, directoryLinkType);
 
         process.env.WHATSAPP_DATA_ROOT = linkedRoot;
         process.env.WHATSAPP_AUTH_DATA_PATH = path.join(linkedRoot, 'auth');
@@ -93,27 +94,27 @@ describe('WhatsApp runtime physical path containment', () => {
         process.env.WHATSAPP_CACHE_DATA_PATH = normalCache;
 
         const authLink = path.join(root, 'auth-link');
-        await fs.symlink(outside, authLink, 'dir');
+        await fs.symlink(outside, authLink, directoryLinkType);
         process.env.WHATSAPP_AUTH_DATA_PATH = authLink;
         expectInvalidRuntimePaths();
 
         await fs.rm(authLink);
         const cacheLink = path.join(root, 'cache-link');
-        await fs.symlink(outside, cacheLink, 'dir');
+        await fs.symlink(outside, cacheLink, directoryLinkType);
         process.env.WHATSAPP_AUTH_DATA_PATH = path.join(root, 'auth');
         process.env.WHATSAPP_CACHE_DATA_PATH = cacheLink;
         expectInvalidRuntimePaths();
 
         await fs.rm(cacheLink);
         const nestedLink = path.join(root, 'nested');
-        await fs.symlink(outside, nestedLink, 'dir');
+        await fs.symlink(outside, nestedLink, directoryLinkType);
         process.env.WHATSAPP_AUTH_DATA_PATH = path.join(nestedLink, 'auth');
         process.env.WHATSAPP_CACHE_DATA_PATH = normalCache;
         expectInvalidRuntimePaths();
 
         await fs.rm(nestedLink);
         const brokenLink = path.join(root, 'broken-cache');
-        await fs.symlink(path.join(outside, 'missing-target'), brokenLink, 'dir');
+        await fs.symlink(path.join(outside, 'missing-target'), brokenLink, directoryLinkType);
         process.env.WHATSAPP_AUTH_DATA_PATH = path.join(root, 'auth');
         process.env.WHATSAPP_CACHE_DATA_PATH = brokenLink;
         expectInvalidRuntimePaths();
@@ -152,7 +153,7 @@ describe('WhatsApp runtime physical path containment', () => {
         const authLink = path.join(root, 'auth');
         const cachePath = path.join(root, 'cache');
         const outsideFile = path.join(outside, 'preserve.txt');
-        await fs.symlink(outside, authLink, 'dir');
+        await fs.symlink(outside, authLink, directoryLinkType);
         await fs.mkdir(cachePath, { recursive: true });
         await fs.writeFile(outsideFile, 'keep');
         await fs.writeFile(path.join(cachePath, 'keep.txt'), 'keep');
@@ -182,7 +183,7 @@ describe('WhatsApp runtime physical path containment', () => {
         const validatedPaths = validateWhatsAppRuntimePaths();
 
         await fs.rm(authPath, { recursive: true, force: true });
-        await fs.symlink(outside, authPath, 'dir');
+        await fs.symlink(outside, authPath, directoryLinkType);
 
         await expect(deleteSessionDirectories(validatedPaths)).rejects.toThrow(/runtime path configuration is invalid/i);
         await expect(fs.readFile(outsideFile, 'utf8')).resolves.toBe('keep');

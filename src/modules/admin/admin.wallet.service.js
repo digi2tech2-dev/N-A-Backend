@@ -134,84 +134,10 @@ const getTransactionHistory = async (userId, { page = 1, limit = 20 } = {}) => {
  *
  * No MongoDB transactions — uses atomic findOneAndUpdate + sequential create.
  */
-const addFunds = async (userId, amount, reason, adminId) => {
-    const parsedAmount = safeRound(Number(amount));
-
-    if (parsedAmount <= 0 || parsedAmount > MAX_ADJUSTMENT) {
-        throw new BusinessRuleError(
-            `Adjustment amount must be between 0.01 and ${MAX_ADJUSTMENT}.`,
-            'INVALID_ADJUSTMENT_AMOUNT'
-        );
-    }
-
-    // Fetch user first to compute credit repayment
-    const user = await User.findById(userId);
-    if (!user) throw new NotFoundError('User');
-
-    if (isExactLedgerEnabled()) {
-        const result = await creditExactWalletAtomic({
-            userId,
-            expectedCurrency: user.currency || 'USD',
-            units: legacyMoneyToUnits(parsedAmount, { label: 'Admin credit amount' }),
-            description: reason || `Admin manual credit (${user.currency || 'USD'})`,
-        });
-        createAuditLog({
-            actorId: adminId, actorRole: ACTOR_ROLES.ADMIN, action: ADMIN_ACTIONS.WALLET_ADJUSTED,
-            entityType: ENTITY_TYPES.WALLET, entityId: userId,
-            metadata: { type: 'ADD', amount: parsedAmount, currency: user.currency || 'USD', reason, userId, transactionId: result.transaction?._id },
-        });
-        return { transaction: result.transaction };
-    }
-
-    const userCurrency = user.currency || 'USD';
-    const balanceBefore = safeRound(user.walletBalance || 0);
-    const balanceAfter = safeRound(balanceBefore + parsedAmount);
-    const creditUsedBefore = recalculateCreditUsed(balanceBefore, user.creditLimit);
-    const creditUsedAfter = recalculateCreditUsed(balanceAfter, user.creditLimit);
-    const creditRepaid = safeRound(Math.max(0, creditUsedBefore - creditUsedAfter));
-
-    // Atomic update
-    await User.findByIdAndUpdate(userId, {
-        $set: {
-            walletBalance: balanceAfter,
-            creditUsed: creditUsedAfter,
-        },
-    });
-
-    // Create the wallet transaction record
-    const transaction = await WalletTransaction.create({
-        userId,
-        currency: userCurrency,
-        type: TRANSACTION_TYPES.CREDIT,
-        amount: parsedAmount,
-        balanceBefore,
-        balanceAfter,
-        reference: null,
-        status: 'COMPLETED',
-        description: reason || `Admin manual credit (${userCurrency})`,
-    });
-
-    // Audit (fire-and-forget)
-    createAuditLog({
-        actorId: adminId,
-        actorRole: ACTOR_ROLES.ADMIN,
-        action: ADMIN_ACTIONS.WALLET_ADJUSTED,
-        entityType: ENTITY_TYPES.WALLET,
-        entityId: userId,
-        metadata: {
-            type: 'ADD',
-            amount: parsedAmount,
-            currency: userCurrency,
-            reason,
-            userId,
-            balanceBefore,
-            balanceAfter,
-            creditRepaid,
-            transactionId: transaction._id,
-        },
-    });
-
-    return { transaction };
+const addFunds = async (userId, amount, reason, adminId, idempotencyKey) => {
+    const result = await require('../../shared/utils/atomicAdminWallet').adjust('ADD',userId,amount,reason,adminId,idempotencyKey);
+    if (isExactLedgerEnabled()) result.transaction = serializeExactCompatibleTransaction(result.transaction);
+    return result;
 };
 
 /**
@@ -225,99 +151,10 @@ const addFunds = async (userId, amount, reason, adminId) => {
  *   Deduction allowed only if: amount <= available
  *   newBalance = walletBalance - amount (can go negative up to -creditLimit)
  */
-const deductFunds = async (userId, amount, reason, adminId) => {
-    const parsedAmount = safeRound(Number(amount));
-
-    if (parsedAmount <= 0 || parsedAmount > MAX_ADJUSTMENT) {
-        throw new BusinessRuleError(
-            `Adjustment amount must be between 0.01 and ${MAX_ADJUSTMENT}.`,
-            'INVALID_ADJUSTMENT_AMOUNT'
-        );
-    }
-
-    // Fetch user to check credit limit
-    const user = await User.findById(userId);
-    if (!user) throw new NotFoundError('User');
-
-    if (isExactLedgerEnabled()) {
-        const result = await debitExactWalletAtomic({
-            userId,
-            expectedCurrency: user.currency || 'USD',
-            units: legacyMoneyToUnits(parsedAmount, { label: 'Admin debit amount' }),
-            description: reason || `Admin manual debit (${user.currency || 'USD'})`,
-            requireActive: false,
-        });
-        createAuditLog({
-            actorId: adminId, actorRole: ACTOR_ROLES.ADMIN, action: ADMIN_ACTIONS.WALLET_ADJUSTED,
-            entityType: ENTITY_TYPES.WALLET, entityId: userId,
-            metadata: { type: 'DEDUCT', amount: parsedAmount, currency: user.currency || 'USD', reason, userId, transactionId: result.transaction?._id },
-        });
-        return { transaction: result.transaction };
-    }
-
-    const userCurrency = user.currency || 'USD';
-    const balanceBefore = safeRound(user.walletBalance || 0);
-    const creditLimit = safeRound(Math.abs(Number(user.creditLimit || 0)));
-    const creditUsedBefore = recalculateCreditUsed(balanceBefore, creditLimit);
-    const totalAvailable = safeRound(balanceBefore + creditLimit);
-
-    if (parsedAmount > totalAvailable) {
-        throw new BusinessRuleError(
-            `Insufficient funds. Available: ${totalAvailable.toFixed(2)} ${userCurrency} ` +
-            `(balance: ${balanceBefore.toFixed(2)}, credit limit: ${creditLimit.toFixed(2)}).`,
-            'INSUFFICIENT_BALANCE'
-        );
-    }
-
-    // Calculate new balance and credit usage
-    const balanceAfter = safeRound(balanceBefore - parsedAmount);
-    const creditUsedAfter = recalculateCreditUsed(balanceAfter, creditLimit);
-    const creditDrawn = safeRound(Math.max(0, creditUsedAfter - creditUsedBefore));
-
-    // Atomic update
-    await User.findByIdAndUpdate(userId, {
-        $set: {
-            walletBalance: balanceAfter,
-            creditUsed: creditUsedAfter,
-        },
-    });
-
-    // Create the wallet transaction record
-    const transaction = await WalletTransaction.create({
-        userId,
-        currency: userCurrency,
-        type: TRANSACTION_TYPES.DEBIT,
-        amount: parsedAmount,
-        balanceBefore,
-        balanceAfter,
-        reference: null,
-        status: 'COMPLETED',
-        description: reason || `Admin manual debit (${userCurrency})`,
-    });
-
-    // Audit (fire-and-forget)
-    createAuditLog({
-        actorId: adminId,
-        actorRole: ACTOR_ROLES.ADMIN,
-        action: ADMIN_ACTIONS.WALLET_ADJUSTED,
-        entityType: ENTITY_TYPES.WALLET,
-        entityId: userId,
-        metadata: {
-            type: 'DEDUCT',
-            amount: parsedAmount,
-            currency: userCurrency,
-            reason,
-            userId,
-            balanceBefore,
-            balanceAfter,
-            creditDrawn,
-            creditUsedBefore,
-            creditUsedAfter,
-            transactionId: transaction._id,
-        },
-    });
-
-    return { transaction };
+const deductFunds = async (userId, amount, reason, adminId, idempotencyKey) => {
+    const result = await require('../../shared/utils/atomicAdminWallet').adjust('DEDUCT',userId,amount,reason,adminId,idempotencyKey);
+    if (isExactLedgerEnabled()) result.transaction = serializeExactCompatibleTransaction(result.transaction);
+    return result;
 };
 
 // ─── Admin Force Set Balance ──────────────────────────────────────────────────
@@ -329,96 +166,10 @@ const deductFunds = async (userId, amount, reason, adminId) => {
  * The amount parameter IS the desired new balance (can be negative).
  * Credit usage is recalculated based on the new balance.
  */
-const setBalance = async (userId, targetBalance, reason, adminId) => {
-    const newBalance = safeRound(Number(targetBalance));
-
-    if (!Number.isFinite(newBalance)) {
-        throw new BusinessRuleError('Target balance must be a valid number.', 'INVALID_AMOUNT');
-    }
-
-    if (Math.abs(newBalance) > MAX_ADJUSTMENT * 10) {
-        throw new BusinessRuleError(
-            `Target balance magnitude exceeds maximum (${MAX_ADJUSTMENT * 10}).`,
-            'INVALID_ADJUSTMENT_AMOUNT'
-        );
-    }
-
-    const user = await User.findById(userId);
-    if (!user) throw new NotFoundError('User');
-
-    if (isExactLedgerEnabled()) {
-        const result = await setExactWalletBalanceAtomic({
-            userId,
-            expectedCurrency: user.currency || 'USD',
-            targetBalanceUnits: legacyMoneyToUnits(newBalance, { label: 'Admin target balance' }),
-            description: reason || `Admin set balance to ${newBalance} (${user.currency || 'USD'})`,
-        });
-        createAuditLog({
-            actorId: adminId, actorRole: ACTOR_ROLES.ADMIN, action: ADMIN_ACTIONS.WALLET_ADJUSTED,
-            entityType: ENTITY_TYPES.WALLET, entityId: userId,
-            metadata: { type: 'SET', targetBalance: newBalance, currency: user.currency || 'USD', reason, userId, transactionId: result.transaction?._id },
-        });
-        return { transaction: result.transaction, user: user.toSafeObject ? user.toSafeObject() : user.toObject() };
-    }
-
-    const userCurrency = user.currency || 'USD';
-    const balanceBefore = safeRound(user.walletBalance || 0);
-    const creditUsedAfter = recalculateCreditUsed(newBalance, user.creditLimit);
-
-    // Atomic update
-    await User.findByIdAndUpdate(userId, {
-        $set: {
-            walletBalance: newBalance,
-            creditUsed: creditUsedAfter,
-        },
-    });
-
-    // Determine transaction type based on direction
-    const delta = safeRound(newBalance - balanceBefore);
-    const txType = delta >= 0 ? TRANSACTION_TYPES.CREDIT : TRANSACTION_TYPES.DEBIT;
-
-    // Create the wallet transaction record
-    const transaction = await WalletTransaction.create({
-        userId,
-        currency: userCurrency,
-        type: txType,
-        amount: safeRound(Math.abs(delta)),
-        balanceBefore,
-        balanceAfter: newBalance,
-        reference: null,
-        status: 'COMPLETED',
-        description: reason || `Admin set balance to ${newBalance} (${userCurrency})`,
-    });
-
-    // Audit (fire-and-forget)
-    createAuditLog({
-        actorId: adminId,
-        actorRole: ACTOR_ROLES.ADMIN,
-        action: ADMIN_ACTIONS.WALLET_ADJUSTED,
-        entityType: ENTITY_TYPES.WALLET,
-        entityId: userId,
-        metadata: {
-            type: 'SET',
-            targetBalance: newBalance,
-            delta,
-            currency: userCurrency,
-            reason,
-            userId,
-            balanceBefore,
-            balanceAfter: newBalance,
-            creditUsedAfter,
-            transactionId: transaction._id,
-        },
-    });
-
-    return {
-        transaction,
-        user: buildPublicWalletSummary({
-            walletBalance: newBalance,
-            creditLimit: user.creditLimit,
-            currency: user.currency,
-        }),
-    };
+const setBalance = async (userId, targetBalance, reason, adminId, idempotencyKey) => {
+    const result = await require('../../shared/utils/atomicAdminWallet').adjust('SET',userId,targetBalance,reason,adminId,idempotencyKey);
+    if (isExactLedgerEnabled()) result.transaction = serializeExactCompatibleTransaction(result.transaction);
+    return result;
 };
 
 // ─── Bulk Debt Adjustment (Currency Devaluation) ─────────────────────────────

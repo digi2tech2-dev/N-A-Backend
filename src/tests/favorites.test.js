@@ -23,7 +23,7 @@ let server;
 let baseUrl;
 
 const authHeaders = (user) => ({
-    Authorization: `Bearer ${jwt.sign({ id: String(user._id) }, config.jwt.secret, { expiresIn: '1h' })}`,
+    Authorization: `Bearer ${jwt.sign({ id: String(user._id), purpose: 'access', sv: String(user.sessionVersion || '0') }, config.jwt.secret, { expiresIn: '1h' })}`,
 });
 
 const request = (method, path, { headers = {}, body } = {}) => new Promise((resolve, reject) => {

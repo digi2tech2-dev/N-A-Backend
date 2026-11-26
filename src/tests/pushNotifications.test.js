@@ -35,7 +35,7 @@ const createPushUser = async () => {
 let server;
 let baseUrl;
 
-const bearerFor = (user) => jwt.sign({ id: user._id.toString() }, config.jwt.secret, { expiresIn: '5m' });
+const bearerFor = (user) => jwt.sign({ id: user._id.toString(), purpose: 'access', sv: String(user.sessionVersion || '0') }, config.jwt.secret, { expiresIn: '5m' });
 const request = async (path, options = {}) => {
     const response = await fetch(`${baseUrl}${path}`, options);
     return { status: response.status, body: await response.json() };

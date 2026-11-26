@@ -106,7 +106,7 @@ const buildVerificationEmailTemplate = ({ name, verificationCode, expiresInMinut
           <tr>
             <td style="padding:48px;">
               <p style="margin:0 0 16px;font-size:16px;color:#374151;">
-                Hi <strong>${name}</strong>,
+                Hi <strong>${require('../shared/utils/escapeHtml')(name)}</strong>,
               </p>
               <p style="margin:0 0 32px;font-size:15px;color:#6b7280;line-height:1.6;">
                 Use the verification code below to confirm your email address and activate your account.
@@ -191,7 +191,7 @@ const _twoFactorOtpTemplate = ({ name, otp }) => `
           <tr>
             <td style="padding:48px;">
               <p style="margin:0 0 16px;font-size:16px;color:#374151;">
-                Hi <strong>${name}</strong>,
+                Hi <strong>${require('../shared/utils/escapeHtml')(name)}</strong>,
               </p>
               <p style="margin:0 0 28px;font-size:15px;color:#6b7280;line-height:1.6;">
                 Use the verification code below to finish signing in. This code expires in

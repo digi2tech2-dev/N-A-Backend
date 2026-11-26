@@ -82,14 +82,14 @@ const listUsers = async ({
     if (status) filter.status = status;
     if (verified != null) filter.verified = verified;
     if (role) filter.role = role;
-    if (email) filter.email = { $regex: email, $options: 'i' };
+    if (email) filter.email = { $regex: require('../../shared/utils/literalSearch')(email), $options: 'i' };
     if (search) {
         const term = String(search).trim();
         if (term) {
             filter.$or = [
-                { name: { $regex: term, $options: 'i' } },
-                { email: { $regex: term, $options: 'i' } },
-                { username: { $regex: term, $options: 'i' } },
+                { name: { $regex: require('../../shared/utils/literalSearch')(term), $options: 'i' } },
+                { email: { $regex: require('../../shared/utils/literalSearch')(term), $options: 'i' } },
+                { username: { $regex: require('../../shared/utils/literalSearch')(term), $options: 'i' } },
             ];
         }
     }
@@ -140,6 +140,7 @@ const getUserById = async (id) => {
  */
 const updateUser = async (id, data, adminId) => {
     const user = await _findOrFail(id);
+    await require('../../shared/utils/accountTarget')(adminId, user);
     const before = user.toObject();
 
     const { name, email, groupId, status, verified, isApiEnabled } = data;
@@ -183,6 +184,7 @@ const updateUser = async (id, data, adminId) => {
 
 const deleteUser = async (id, adminId) => {
     const user = await _findOrFail(id);
+    await require('../../shared/utils/accountTarget')(adminId, user);
 
     if (user.deletedAt) throw new BusinessRuleError('User is already deleted.', 'ALREADY_DELETED');
     if (user.role === ROLES.ADMIN) throw new BusinessRuleError('Admin accounts cannot be deleted.', 'CANNOT_DELETE_ADMIN');
@@ -242,6 +244,7 @@ const listDeletedUsers = async ({
  */
 const restoreUser = async (id, adminId) => {
     const user = await _findOrFail(id);
+    await require('../../shared/utils/accountTarget')(adminId, user);
 
     if (!user.deletedAt) {
         throw new BusinessRuleError('User is not deleted.', 'NOT_DELETED');
@@ -277,6 +280,7 @@ const { approveUser, rejectUser } = require('../users/user.service');
  */
 const updateUserRole = async (id, role, adminId) => {
     const user = await _findOrFail(id);
+    await require('../../shared/utils/accountTarget')(adminId, user);
     if (user._id.toString() === adminId.toString()) {
         throw new BusinessRuleError('You cannot change your own role.', 'SELF_ROLE_CHANGE');
     }
@@ -316,6 +320,7 @@ const updateUserRole = async (id, role, adminId) => {
  */
 const updateUserCurrency = async (id, currency, adminId) => {
     const user = await _findOrFail(id);
+    await require('../../shared/utils/accountTarget')(adminId, user);
     const code = currency.toUpperCase();
 
     // Same currency → no-op
@@ -413,6 +418,7 @@ const resetUserPassword = async (id, newPassword, adminId) => {
     // Need to select password field explicitly since it has select: false
     const user = await User.findById(id).select('+password');
     if (!user) throw new NotFoundError('User');
+    await require('../../shared/utils/accountTarget')(adminId, user);
 
     user.password = newPassword; // pre-save hook will bcrypt hash this
     await user.save();
@@ -437,6 +443,7 @@ const resetUserPassword = async (id, newPassword, adminId) => {
  */
 const updateUserAvatar = async (id, avatarUrl, adminId) => {
     const user = await _findOrFail(id);
+    await require('../../shared/utils/accountTarget')(adminId, user);
 
     const previousAvatar = user.avatar;
     user.avatar = avatarUrl || null;
@@ -461,6 +468,7 @@ const updateUserAvatar = async (id, avatarUrl, adminId) => {
  */
 const updateUserCreditLimit = async (id, creditLimit, adminId) => {
     const user = await _findOrFail(id);
+    await require('../../shared/utils/accountTarget')(adminId, user);
 
     const previousCreditLimit = user.creditLimit || 0;
     const nextCreditLimit = Math.max(0, Number(creditLimit) || 0);
@@ -500,6 +508,7 @@ const updateUserCreditLimit = async (id, creditLimit, adminId) => {
  */
 const updateUserPermissions = async (id, permissions, adminId) => {
     const user = await _findOrFail(id);
+    await require('../../shared/utils/accountTarget')(adminId, user);
 
     const previousPermissions = [...(user.permissions || [])];
     user.permissions = permissions;

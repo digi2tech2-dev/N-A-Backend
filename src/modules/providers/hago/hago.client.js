@@ -124,7 +124,7 @@ class HagoClient {
         this.baseUrl = baseUrl;
         this.apiKey = options.apiKey ?? process.env.HAGO_API_KEY ?? '';
         this.timeout = parseTimeout(options.timeoutMs ?? process.env.HAGO_API_TIMEOUT_MS);
-        this._client = options.httpClient ?? axios.create({
+        this._client = options.httpClient ?? require('../../../shared/utils/safeProviderHttp').create({
             baseURL: this.baseUrl,
             timeout: this.timeout,
             headers: {
