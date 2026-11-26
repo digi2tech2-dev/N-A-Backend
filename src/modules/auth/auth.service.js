@@ -11,7 +11,7 @@
  *   - loginWithGoogle   : called after successful passport OAuth callback
  *   - generate2FASecret : send email OTP before enabling 2FA
  *   - enable2FA         : confirm setup OTP and activate email OTP 2FA
- *   - disable2FA        : deactivate 2FA
+ *   - disable2FA        : reject attempts to disable globally required MFA
  *   - verify2FA         : consume temp token + email OTP code to issue full JWT
  *
  * Security design:
@@ -19,8 +19,8 @@
  *   - Tokens expire in 24 hours
  *   - Password is never stored in raw form (bcrypt via model pre-save hook)
  *   - JWT is only issued when account is ACTIVE (approved by admin)
- *   - If 2FA is enabled, login issues a short-lived temp token (5 min)
- *     that must be exchanged via /verify-2fa for the full JWT
+ *   - Every login issues a short-lived MFA challenge that must be exchanged
+ *     via /verify-2fa before the full JWT is issued
  */
 
 const crypto = require('crypto');
@@ -346,21 +346,7 @@ const login = async ({ email, password }) => {
     }
 
     // ── Gate 4: Two-Factor Authentication ─────────────────────────────────────
-    if (user.isTwoFactorEnabled) return require('../../shared/utils/loginChallenge')(user);
-
-    // ── 5. Issue full JWT ──────────────────────────────────────────────────────
-    const token = await signToken(user._id, user.role);
-
-    createAuditLog({
-        actorId: user._id,
-        actorRole: ACTOR_ROLES[user.role] ?? user.role,
-        action: USER_ACTIONS.LOGIN_SUCCESS,
-        entityType: ENTITY_TYPES.USER,
-        entityId: user._id,
-        metadata: { email: user.email },
-    });
-
-    return { token, user: user.toSafeObject() };
+    return require('../../shared/utils/loginChallenge')(user);
 };
 
 // ─── verifyEmail ──────────────────────────────────────────────────────────────
@@ -559,19 +545,7 @@ const loginWithGoogle = async (user) => {
         };
     }
 
-    if (user.isTwoFactorEnabled) return require('../../shared/utils/loginChallenge')(user);
-    const token = await signToken(user._id, user.role);
-
-    createAuditLog({
-        actorId: user._id,
-        actorRole: ACTOR_ROLES[user.role] ?? user.role,
-        action: USER_ACTIONS.LOGIN_SUCCESS,
-        entityType: ENTITY_TYPES.USER,
-        entityId: user._id,
-        metadata: { email: user.email, method: 'google-oauth' },
-    });
-
-    return { status: 'LOGIN_COMPLETE', token, user: user.toSafeObject() };
+    return require('../../shared/utils/loginChallenge')(user);
 };
 
 const completeGoogleProfile = async ({ completionToken, country, currency }) => {
@@ -617,19 +591,7 @@ const completeGoogleProfile = async ({ completionToken, country, currency }) => 
     user.profileCompletionTokenExpires = null;
     await user.save();
 
-    if (user.isTwoFactorEnabled) return require('../../shared/utils/loginChallenge')(user);
-    const token = await signToken(user._id, user.role);
-
-    createAuditLog({
-        actorId: user._id,
-        actorRole: ACTOR_ROLES[user.role] ?? user.role,
-        action: USER_ACTIONS.LOGIN_SUCCESS,
-        entityType: ENTITY_TYPES.USER,
-        entityId: user._id,
-        metadata: { email: user.email, method: 'google-profile-completion' },
-    });
-
-    return { status: 'LOGIN_COMPLETE', token, user: user.toSafeObject() };
+    return require('../../shared/utils/loginChallenge')(user);
 };
 
 // ─── generate2FASecret ────────────────────────────────────────────────────────
@@ -723,50 +685,17 @@ const enable2FA = async (userId, code) => {
 // ─── disable2FA ───────────────────────────────────────────────────────────────
 
 /**
- * Disable 2FA for a user. Requires a valid password to prevent unauthorized disabling.
+ * MFA is mandatory for all accounts and cannot be disabled.
  *
  * @param {string|ObjectId} userId
- * @param {{ password?: string }} credentials
  */
-const disable2FA = async (userId, { password } = {}) => {
+const disable2FA = async (userId) => {
     const user = await User.findById(userId).select('+password');
     if (!user) throw new NotFoundError('User');
-
-    if (!user.isTwoFactorEnabled) {
-        throw new BusinessRuleError(
-            '2FA is not currently enabled on this account.',
-            'NOT_2FA_ENABLED'
-        );
-    }
-
-    // Require at least one proof of identity
-    let verified = false;
-
-    if (password && user.password) {
-        verified = await user.comparePassword(password);
-    }
-
-    if (!verified) {
-        throw new AuthenticationError(
-            'Invalid credentials. Provide a valid password to disable 2FA.'
-        );
-    }
-
-    user.isTwoFactorEnabled = false;
-    user.twoFactorOtp = null;
-    user.twoFactorOtpExpires = null;
-    await user.save();
-
-    createAuditLog({
-        actorId: user._id,
-        actorRole: ACTOR_ROLES[user.role] ?? user.role,
-        action: USER_ACTIONS.TWO_FACTOR_DISABLED,
-        entityType: ENTITY_TYPES.USER,
-        entityId: user._id,
-        metadata: { email: user.email },
-    });
-
-    return { message: '2FA has been successfully disabled.' };
+    throw new BusinessRuleError(
+        'Two-factor authentication is required for every account and cannot be disabled.',
+        'TWO_FACTOR_REQUIRED'
+    );
 };
 
 // ─── verify2FA ────────────────────────────────────────────────────────────────
